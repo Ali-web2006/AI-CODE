@@ -68,7 +68,7 @@ function LobbyScreen.mount(parent: Frame, ctx: UIContext.Context): UIContext.Pan
 	})
 	UI.create("UISizeConstraint", { MaxSize = Vector2.new(1200, math.huge), Parent = column })
 
-	local title = UI.label({ text = "Iron Throne", size = Theme.TextSize.Display, font = Fonts.Title, color = Colors.GoldBright, align = Enum.TextXAlignment.Center, parent = column })
+	local title = UI.label({ text = "Iron Throne — Local Test", size = Theme.TextSize.Display, font = Fonts.Title, color = Colors.GoldBright, align = Enum.TextXAlignment.Center, parent = column })
 	title.Size = UDim2.new(1, 0, 0, 54)
 	local subtitle = UI.label({ text = "", size = Theme.TextSize.Body, font = Fonts.SerifItalic, color = Colors.MutedOnDark, align = Enum.TextXAlignment.Center, parent = column })
 	subtitle.Position = UDim2.fromOffset(0, 56)
