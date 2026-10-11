@@ -406,13 +406,22 @@ def build_subs(lab, region, warp_x, warp_y):
     return sub, seeds, province_of
 
 
-def pick_shades(rgb, sub_masks, adjacency, palette):
+# Regions whose palette is not the reference's hue (the reference draws the North grey and the
+# Crownlands purple) match shades by brightness instead of by colour.
+MATCH_BY_LUMINANCE = {"north", "crownlands"}
+
+
+def pick_shades(rgb, sub_masks, adjacency, palette, by_luminance=False):
     palette_rgb = np.array([[int(c[i:i + 2], 16) for i in (1, 3, 5)] for c in palette], float)
+    weights = np.array([0.2126, 0.7152, 0.0722])
     choice = {}
     for sid in sorted(sub_masks, key=lambda s: -sub_masks[s].sum()):
         colours = rgb[sub_masks[sid]]
         median = np.median(colours, axis=0)
-        order = np.argsort(np.abs(palette_rgb - median).sum(axis=1))
+        if by_luminance:
+            order = np.argsort(np.abs(palette_rgb @ weights - median @ weights))
+        else:
+            order = np.argsort(np.abs(palette_rgb - median).sum(axis=1))
         taken = {choice[n] for n in adjacency.get(sid, ()) if n in choice}
         pick = next((int(i) for i in order if int(i) not in taken), int(order[0]))
         choice[sid] = pick
@@ -558,8 +567,8 @@ def render_luau(subs, features, shapes, rgb, ids, adjacency):
     for region in REGIONS:
         region_subs = [s for s in subs if s["region"] == region]
         masks = {s["id"]: ids == s["id"] for s in region_subs}
-        palette = house_palettes[REGION_HOUSE[region]]
-        shade_choice.update(pick_shades(rgb, masks, adjacency, palette))
+        palette = house_palettes[region]
+        shade_choice.update(pick_shades(rgb, masks, adjacency, palette, region in MATCH_BY_LUMINANCE))
     for s in subs:
         region = s["region"]
         counters[region] = counters.get(region, 0) + 1
@@ -592,19 +601,28 @@ def render_luau(subs, features, shapes, rgb, ids, adjacency):
 
 REGION_HOUSE = {
     "north": "stark", "vale": "arryn", "riverlands": "tully", "iron_islands": "greyjoy", "westerlands": "lannister",
-    "reach": "tyrell", "stormlands": "baratheon", "crownlands": "targaryen", "dorne": "martell",
+    "reach": "tyrell", "stormlands": "baratheon", "crownlands": "baratheon", "dorne": "martell",
 }
 
 
 def read_palettes():
-    """Reads each house's shadeColors from the hand-written part of MapData.luau."""
+    """Each region's palette from the hand-written part of MapData.luau: the region's own
+    shadeColors when it has them (the Crownlands), else its ruling house's."""
     source = MAP_DATA.read_text(encoding="utf-8")
+    houses_block = source[source.index("MapData.houses = {"):source.index("} :: { House }")]
+    house_palettes = {}
+    for match in re.finditer(r'id = "(\w+)",.*?shadeColors = \{([^}]*)\}', houses_block, re.S):
+        house_palettes[match.group(1)] = re.findall(r'"(#[0-9A-Fa-f]{6})"', match.group(2))
     palettes = {}
-    for match in re.finditer(r'id = "(\w+)",.*?shadeColors = \{([^}]*)\}', source, re.S):
-        palettes[match.group(1)] = re.findall(r'"(#[0-9A-Fa-f]{6})"', match.group(2))
-    missing = [h for h in REGION_HOUSE.values() if not palettes.get(h)]
+    for region in REGIONS:
+        own = re.search(r'id = "%s",\s*name = "[^"]*",\s*houseId = "(\w+)",\s*shadeColors = \{([^}]*)\}' % region, source)
+        if own:
+            palettes[region] = re.findall(r'"(#[0-9A-Fa-f]{6})"', own.group(2))
+        else:
+            palettes[region] = house_palettes.get(REGION_HOUSE[region], [])
+    missing = [r for r, palette in palettes.items() if not palette]
     if missing:
-        sys.exit(f"MapData.luau lacks shadeColors for {missing}")
+        sys.exit(f"MapData.luau lacks a palette for {missing}")
     return palettes
 
 

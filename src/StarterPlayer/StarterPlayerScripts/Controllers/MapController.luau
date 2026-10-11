@@ -661,6 +661,20 @@ local function buildCrestsAndLabels()
 			table.insert(crests, view)
 		end
 	end
+	for _, region in MapData.regions do
+		local crest = region.crest
+		local house = houses[region.houseId]
+		if crest and house then
+			local view = SigilView.new(house.id, {
+				anchorPoint = Vector2.new(0.5, 0.5),
+				position = scalePosition(crest.x, crest.y),
+				fallbackColor = fromHex(house.primaryColor),
+				name = `Crest_{region.id}`,
+				parent = crestLayer,
+			})
+			table.insert(crests, view)
+		end
+	end
 
 	local labelLayer = layer("Labels", 9)
 	for _, feature in MapData.specialFeatures do
@@ -674,31 +688,43 @@ local function buildCrestsAndLabels()
 			table.insert(featureLabels, { label = label })
 		end
 	end
+	-- Two-line labels: every great house ("HOUSE" / name) and every region with its own title.
+	local entries: { { id: string, color: string, lines: { string }, spot: MapData.Point } } = {}
 	for _, house in MapData.houses do
-		local spot = house.label
-		if spot and not house.minor then
-			local textColor, halo = MapStyle.contrast(fromHex(house.primaryColor))
-			local holder = UI.create("Frame", {
-				Name = `HouseLabel_{house.id}`,
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = scalePosition(spot.x, spot.y),
-				AutomaticSize = Enum.AutomaticSize.XY,
-				Size = UDim2.fromOffset(0, 0),
-				BackgroundTransparency = 1,
-				Parent = labelLayer,
-			})
-			UI.create("UIListLayout", {
-				FillDirection = Enum.FillDirection.Vertical,
-				HorizontalAlignment = Enum.HorizontalAlignment.Center,
-				SortOrder = Enum.SortOrder.LayoutOrder,
-				Padding = UDim.new(0, -2),
-				Parent = holder,
-			})
+		if house.label and not house.minor then
 			local name = string.upper((string.gsub(house.name, "^House%s+", "")))
-			local houseLine = textLabel({ Text = "HOUSE", TextColor3 = textColor, LayoutOrder = 1, Parent = holder }, halo)
-			local nameLine = textLabel({ Text = name, TextColor3 = textColor, LayoutOrder = 2, Parent = holder }, halo)
-			table.insert(houseLabels, { holder = holder, house = houseLine, name = nameLine })
+			table.insert(entries, { id = house.id, color = house.primaryColor, lines = { "HOUSE", name }, spot = house.label })
 		end
+	end
+	for _, region in MapData.regions do
+		local house = houses[region.houseId]
+		if region.title and region.label and house then
+			local palette = region.shadeColors or house.shadeColors
+			table.insert(entries, { id = region.id, color = palette[1], lines = region.title, spot = region.label })
+		end
+	end
+	for _, entry in entries do
+		local spot = entry.spot
+		local textColor, halo = MapStyle.contrast(fromHex(entry.color))
+		local holder = UI.create("Frame", {
+			Name = `HouseLabel_{entry.id}`,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = scalePosition(spot.x, spot.y),
+			AutomaticSize = Enum.AutomaticSize.XY,
+			Size = UDim2.fromOffset(0, 0),
+			BackgroundTransparency = 1,
+			Parent = labelLayer,
+		})
+		UI.create("UIListLayout", {
+			FillDirection = Enum.FillDirection.Vertical,
+			HorizontalAlignment = Enum.HorizontalAlignment.Center,
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Padding = UDim.new(0, -2),
+			Parent = holder,
+		})
+		local houseLine = textLabel({ Text = entry.lines[1], TextColor3 = textColor, LayoutOrder = 1, Parent = holder }, halo)
+		local nameLine = textLabel({ Text = entry.lines[2] or "", TextColor3 = textColor, LayoutOrder = 2, Parent = holder }, halo)
+		table.insert(houseLabels, { holder = holder, house = houseLine, name = nameLine })
 	end
 end
 
@@ -915,7 +941,7 @@ local function indexData()
 	for _, data in MapData.subTerritories do
 		local region = regions[data.regionId]
 		local house = houseOf(data, region)
-		local shades = house.shadeColors
+		local shades = if data.houseId == nil and region.shadeColors then region.shadeColors else house.shadeColors
 		local baseColor = fromHex(shades[math.clamp(data.shade, 1, #shades)])
 		local bounds = {}
 		for index, path in data.paths do

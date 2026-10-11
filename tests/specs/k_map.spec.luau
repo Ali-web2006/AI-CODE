@@ -9,22 +9,23 @@ return function(t)
 	local Polygon = vr.require("ReplicatedStorage.Shared.Util.Polygon")
 	local Content = fx.Content
 
-	-- The palettes the map must use, exactly.
+	-- The palettes the map must use, exactly. House Stark has a steel-blue house colour (not grey,
+	-- which read as unowned land) and the Crownlands use the crown's own gold palette.
 	local PALETTES = {
-		stark = { "#FFFFFF", "#E6E6E6", "#BDBDBD", "#8C8C8C", "#4A4A4A", "#2B2B2B" },
+		stark = { "#DDE7F0", "#BCCEDF", "#9CB5CC", "#7E9CB8", "#6585A3", "#4F6E8C" },
 		arryn = { "#BFF3FF", "#7FE0F5", "#35C6E8", "#1FA3C4", "#0F7A99" },
 		tully = { "#4A63FF", "#2F45E0", "#2433B8", "#1C2490", "#3A2FD0" },
 		greyjoy = { "#2E2E22", "#4A4A2E", "#6B6A3A", "#A99B4A", "#D9C25A" },
 		lannister = { "#FF1E1E", "#E01010", "#B80D0D", "#F25C6A", "#FF8A8A" },
 		tyrell = { "#3DFF3D", "#1FD11F", "#12A812", "#7CFC5A", "#0B7A0B" },
 		baratheon = { "#FFF34D", "#F5DC1F", "#E8C40E", "#FFE680", "#C9A300" },
-		targaryen = { "#E6A8F5", "#C85CE8", "#9B2DC4", "#7A1B99", "#D63CB8" },
 		martell = { "#FFB04D", "#FF8A1F", "#F06A0A", "#FF9E5C", "#C9520A" },
 	}
 	local SEATS = {
 		stark = "Winterfell", arryn = "The Eyrie", tully = "Riverrun", greyjoy = "Pyke", lannister = "Casterly Rock",
-		tyrell = "Highgarden", baratheon = "Storm's End", targaryen = "Dragonstone", martell = "Sunspear",
+		tyrell = "Highgarden", baratheon = "Storm's End", martell = "Sunspear",
 	}
+	local CROWN_PALETTE = { "#E8BE52", "#D9A21B", "#B9850F", "#94680A", "#CC9433" }
 
 	local function isHex(value: any): boolean
 		return type(value) == "string" and string.match(value, "^#%x%x%x%x%x%x$") ~= nil
@@ -65,14 +66,15 @@ return function(t)
 		return false
 	end
 
-	t.test("the map has exactly the nine great houses with the specified palettes", function()
+	t.test("the map has exactly the great houses of 297 AC with the specified palettes", function()
 		local great = 0
 		for _, house in MapData.houses do
 			if not house.minor then
 				great += 1
 			end
 		end
-		expect.equal(great, 9, "exactly nine great houses (minor houses, when added, are flagged minor)")
+		expect.equal(great, 8, "eight great houses; the Targaryens are in exile (minor houses are flagged minor)")
+		expect.falsy(houses.targaryen, "House Targaryen is not on the 297 AC map")
 		for id, palette in PALETTES do
 			local house = houses[id]
 			expect.truthy(house ~= nil, `house {id} is on the map`)
@@ -93,13 +95,27 @@ return function(t)
 		for _, region in MapData.regions do
 			expect.truthy(houses[region.houseId] ~= nil, `region {region.id} references house {region.houseId}`)
 			expect.truthy(Content.regions[region.id] ~= nil, `region {region.id} is a game region`)
-			expect.falsy(claimed[region.houseId], `house {region.houseId} owns one region`)
 			claimed[region.houseId] = true
+			-- The ruling house really holds land there at the start of the campaign.
+			local holds = false
+			for provinceId, setup in Content.getBookmark("long_summer_297").provinces do
+				if Content.provinces[provinceId].regionId == region.id and setup.ownerHouseId == region.houseId then
+					holds = true
+				end
+			end
+			expect.truthy(holds, `{region.houseId} holds a province in {region.id} in 297 AC`)
 			expect.truthy(#region.paths >= 1, `region {region.id} has an outline`)
 			for index, path in region.paths do
 				validPath(path, `region {region.id} path {index}`)
 			end
 		end
+		for id in PALETTES do
+			expect.truthy(claimed[id], `{id} rules a region`)
+		end
+		local crownlands = regions.crownlands
+		expect.equal(crownlands.houseId, "baratheon", "the Crownlands belong to the crown, House Baratheon")
+		expect.deepEqual(crownlands.shadeColors, CROWN_PALETTE, "the Crownlands palette")
+		expect.truthy(crownlands.title and crownlands.label and crownlands.crest, "the Crownlands have their own title and crest")
 	end)
 
 	t.test("sub-territories split each region 4-10 ways and select real provinces of that region", function()
@@ -114,7 +130,8 @@ return function(t)
 			expect.equal(province.regionId, sub.regionId, `{sub.id} province lies in its region`)
 			local house = houses[sub.houseId or region.houseId]
 			expect.truthy(house ~= nil, `{sub.id} house`)
-			expect.truthy(sub.shade >= 1 and sub.shade <= #house.shadeColors, `{sub.id} shade index`)
+			local palette = if sub.houseId == nil and region.shadeColors then region.shadeColors else house.shadeColors
+			expect.truthy(sub.shade >= 1 and sub.shade <= #palette, `{sub.id} shade index`)
 			for index, path in sub.paths do
 				validPath(path, `{sub.id} path {index}`)
 			end
@@ -241,19 +258,22 @@ return function(t)
 				triangles += #layer.tris // 6
 			end
 			expect.truthy(triangles <= 260, `{id} art is light enough to render ({triangles} triangles)`)
-			local region = nil
-			for _, candidate in MapData.regions do
-				if candidate.houseId == id then
-					region = candidate
-				end
-			end
+		end
+		local function over(region, crest, label: string)
 			local box = { minX = math.huge, minY = math.huge, maxX = -math.huge, maxY = -math.huge }
 			for _, path in region.paths do
 				local b = Polygon.bounds(path)
 				box = { minX = math.min(box.minX, b.minX), minY = math.min(box.minY, b.minY), maxX = math.max(box.maxX, b.maxX), maxY = math.max(box.maxY, b.maxY) }
 			end
-			local crest = houses[id].crest
-			expect.truthy(crest.x >= box.minX and crest.x <= box.maxX and crest.y >= box.minY and crest.y <= box.maxY, `{id} crest sits over its region`)
+			expect.truthy(crest.x >= box.minX and crest.x <= box.maxX and crest.y >= box.minY and crest.y <= box.maxY, label)
+		end
+		for _, region in MapData.regions do
+			local house = houses[region.houseId]
+			if house.regionName == region.name then
+				over(region, house.crest, `{house.id} crest sits over {region.id}`)
+			elseif region.crest then
+				over(region, region.crest, `{region.id} crest sits over its region`)
+			end
 		end
 	end)
 

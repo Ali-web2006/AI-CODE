@@ -143,8 +143,10 @@ def main():
 
     # Fills
     for sub in mp["subTerritories"]:
-        house = houses[sub.get("houseId") or regions[sub["regionId"]]["houseId"]]
-        colour = hex_rgb(house["shadeColors"][sub["shade"] - 1])
+        region = regions[sub["regionId"]]
+        house = houses[sub.get("houseId") or region["houseId"]]
+        palette = region.get("shadeColors") if not sub.get("houseId") and region.get("shadeColors") else house["shadeColors"]
+        colour = hex_rgb(palette[sub["shade"] - 1])
         for path in sub["paths"]:
             cv.draw.polygon([cv.pt(x, y) for x, y in pairs(path)], fill=colour)
     for feature in mp["specialFeatures"]:
@@ -175,6 +177,10 @@ def main():
         for house in mp["houses"]:
             if house.get("crest") and not house.get("minor"):
                 draw_sigil(cv, data.get("sigils", {}).get(house["id"]), house["crest"]["x"], house["crest"]["y"], crest_px, house["primaryColor"])
+        for region in mp["regions"]:
+            if region.get("crest"):
+                house = houses[region["houseId"]]
+                draw_sigil(cv, data.get("sigils", {}).get(house["id"]), region["crest"]["x"], region["crest"]["y"], crest_px, house["primaryColor"])
         cv.image = Image.blend(cv.image, layer_before, fade)
         cv.draw = ImageDraw.Draw(cv.image)
 
@@ -194,17 +200,23 @@ def main():
             if z >= STYLE["location_label_zoom"]:
                 text_with_halo(cv.draw, (x, y + STYLE["icon_px"] * 0.6 * SUPERSAMPLE), loc["name"], font(STYLE["location_text"] * SUPERSAMPLE, False), (24, 20, 16), (244, 236, 216), SUPERSAMPLE, anchor="mt")
 
-    # Great-house labels (always visible)
+    # Great-house labels and region titles (always visible)
+    entries = []
     for house in mp["houses"]:
-        if house.get("minor") or args.no_crests or not house.get("label"):
-            continue
+        if not house.get("minor") and house.get("label"):
+            entries.append((house["primaryColor"], ["HOUSE", house["name"].split(" ", 1)[1].upper()], house["label"]))
+    for region in mp["regions"]:
+        if region.get("title") and region.get("label"):
+            palette = region.get("shadeColors") or houses[region["houseId"]]["shadeColors"]
+            entries.append((palette[0], region["title"], region["label"]))
+    if not args.no_crests:
         size = max(STYLE["house_text_min"], min(STYLE["house_text_max"], STYLE["house_text_units"] * z))
-        dark_text = luminance(hex_rgb(house["primaryColor"])) > 0.55
-        fill, halo = ((40, 40, 40), (255, 255, 255)) if dark_text else ((255, 255, 255), (20, 20, 20))
-        x, y = cv.pt(house["label"]["x"], house["label"]["y"])
-        name = house["name"].split(" ", 1)[1].upper()
-        text_with_halo(cv.draw, (x, y - size * 0.55 * SUPERSAMPLE), "HOUSE", font(int(size * 0.62 * SUPERSAMPLE)), fill, halo, int(1.5 * SUPERSAMPLE))
-        text_with_halo(cv.draw, (x, y + size * 0.35 * SUPERSAMPLE), name, font(int(size * SUPERSAMPLE)), fill, halo, int(1.5 * SUPERSAMPLE))
+        for colour, lines, spot in entries:
+            dark_text = luminance(hex_rgb(colour)) > 0.55
+            fill, halo = ((40, 40, 40), (255, 255, 255)) if dark_text else ((255, 255, 255), (20, 20, 20))
+            x, y = cv.pt(spot["x"], spot["y"])
+            text_with_halo(cv.draw, (x, y - size * 0.55 * SUPERSAMPLE), lines[0], font(int(size * 0.62 * SUPERSAMPLE)), fill, halo, int(1.5 * SUPERSAMPLE))
+            text_with_halo(cv.draw, (x, y + size * 0.35 * SUPERSAMPLE), lines[1], font(int(size * SUPERSAMPLE)), fill, halo, int(1.5 * SUPERSAMPLE))
 
     out = cv.image.resize((cv.size[0] // SUPERSAMPLE, cv.size[1] // SUPERSAMPLE), Image.LANCZOS).convert("RGB")
     out.save(args.target)

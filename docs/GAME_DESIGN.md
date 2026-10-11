@@ -181,18 +181,18 @@ Balance over a 30-year all-AI run (`tests/balance_report.luau`):
   * Kingsgrave (Prince's Pass)
   * Yronwood (the Boneway)
 * The drawing (Data/World/MapData.luau, a single configuration file):
-  * a political map of the nine great houses in a 1000 x 1900 viewBox, traced from a reference
-    map: Stark, Arryn, Tully, Greyjoy, Lannister, Tyrell, Baratheon, Targaryen (the Crownlands
-    and Dragonstone) and Martell, each with its exact palette;
+  * a political map of the great houses of 297 AC in a 1000 x 1900 viewBox, traced from a
+    reference map: Stark, Arryn, Tully, Greyjoy, Lannister, Tyrell, Baratheon and Martell, each
+    with its palette. The Targaryens are in exile: the Crownlands and Dragonstone are the crown's,
+    drawn as House Baratheon's royal demesne ("THE CROWN") in their own gold;
   * every region is split into 4-10 unnamed sub-territories shaded from its house's palette;
     each sub-territory belongs to one of the game's 34 provinces, so clicking land selects it;
   * Beyond the Wall (flat grey), the Wall (a black band across the continent at y 80-130), the
     Gift (black, just south of it) and the Stepstones;
   * a heater-shield crest per great house (flat vector sigils), two-line "HOUSE / NAME" labels,
     and icons for seats (castle), cities (house), ports (anchor) and landmarks (tower).
-* The drawing is presentation only. Who holds a province is game state: in 297 AC House Baratheon
-  holds the Crownlands and Dragonstone (House Targaryen appears on the map only), and the Freys
-  and Boltons hold provinces inside the Tully and Stark regions.
+* The drawing is presentation only. Who holds a province is game state: the Freys and Boltons
+  hold provinces inside the Tully and Stark regions, which the Realm map mode shows.
 * Map modes:
   * Houses (default): the great houses' palettes.
   * Realm: the colour of the house that holds each province today.

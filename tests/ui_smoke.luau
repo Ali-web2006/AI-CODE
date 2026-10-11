@@ -532,14 +532,20 @@ for _, part in reals[land]:GetChildren() do
 end
 check(wedgeCount > 4000, `map land is drawn with flat triangles ({wedgeCount} wedges)`)
 local crestCount = 0
+local crestIds = {}
 for _, house in MapData.houses do
-	local crest = mapRoot:FindFirstChild(`Crest_{house.id}`, true)
+	table.insert(crestIds, house.id)
+end
+table.insert(crestIds, "crownlands")
+for _, id in crestIds do
+	local crest = mapRoot:FindFirstChild(`Crest_{id}`, true)
 	if crest and #reals[crest]:FindFirstChild("Art"):GetChildren() > 0 then
 		crestCount += 1
 	end
 end
-check(crestCount == 9, `all nine great-house crests are drawn ({crestCount})`)
-check(findByText("STARK", "TextLabel") ~= nil and findByText("TARGARYEN", "TextLabel") ~= nil, "great-house labels are shown")
+check(crestCount == 9, `eight great-house crests and the crown's are drawn ({crestCount})`)
+check(findByText("STARK", "TextLabel") ~= nil and findByText("THE CROWN", "TextLabel") ~= nil, "great-house labels and the Crownlands title are shown")
+check(findByText("TARGARYEN", "TextLabel") == nil, "no Targaryen label in 297 AC")
 local subBorders = mapRoot:FindFirstChild("SubBorders", true)
 local paths = 0
 for _, line in reals[subBorders]:GetChildren() do
