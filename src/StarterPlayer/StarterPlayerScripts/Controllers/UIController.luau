@@ -116,16 +116,16 @@ function UIController.start()
 			ActionController.run(commandName, payload, key, onDone)
 		end,
 		isBusy = ActionController.isBusy,
-		selectProvince = function(provinceId, focus)
+		selectProvince = function(provinceId: string?, focus: boolean?)
 			selectProvince(provinceId, focus)
 		end,
 		selectedProvince = function()
 			return selectedProvinceId
 		end,
-		showTab = function(tab)
+		showTab = function(tab: UIContext.Tab)
 			showTab(tab)
 		end,
-		focusHouse = function(houseId)
+		focusHouse = function(houseId: string)
 			focusHouse(houseId)
 		end,
 		notify = function(text, tone)
@@ -257,7 +257,7 @@ function UIController.start()
 		applyLayout()
 	end
 
-	selectProvince = function(provinceId, focus)
+	selectProvince = function(provinceId: string?, focus: boolean?)
 		selectedProvinceId = provinceId
 		MapController.select(provinceId)
 		if provinceId then
@@ -364,9 +364,12 @@ function UIController.start()
 		end
 		-- Each view updates in isolation: an error in one must not stop the others refreshing.
 		local function safely(label: string, fn: () -> ())
-			local ok, err = xpcall(fn, debug.traceback)
+			local failure: string? = nil
+			local ok = xpcall(fn, function(message: any)
+				failure = debug.traceback(tostring(message), 2)
+			end)
 			if not ok then
-				warn(`[IronThrone][UI] {label} failed to update: {err}`)
+				warn(`[IronThrone][UI] {label} failed to update: {failure}`)
 			end
 		end
 		safely("lobby", function()

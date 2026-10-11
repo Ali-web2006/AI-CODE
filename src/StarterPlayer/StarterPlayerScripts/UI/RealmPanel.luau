@@ -119,8 +119,9 @@ function RealmPanel.mount(parent: Frame, ctx: UIContext.Context): UIContext.Pane
 			UI.list(card, "vertical", 6)
 			local culture = Content.cultures[ruler.cultureId]
 			local faith = Content.faiths[ruler.faithId]
+			local epithet: string? = ruler.epithet
 			UI.label({
-				text = `<b>{Format.escape(CharacterRules.displayName(ruler :: any))}</b>{if ruler.epithet then ` <i>{Format.escape(ruler.epithet)}</i>` else ""}`,
+				text = `<b>{Format.escape(CharacterRules.displayName(ruler :: any))}</b>{if epithet then ` <i>{Format.escape(epithet)}</i>` else ""}`,
 				rich = true,
 				font = Fonts.Serif,
 				size = Theme.TextSize.Large,

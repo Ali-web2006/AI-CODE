@@ -53,7 +53,15 @@ local MAP_HEIGHT = Content.map.height
 local MAX_ZOOM = 2.4
 local ROUTE_TRIM = 14
 
-local ROUTE_STYLES = {
+type RouteStyle = {
+	color: Color3,
+	thickness: number,
+	dash: number?,
+	gap: number?,
+	transparency: number,
+}
+
+local ROUTE_STYLES: { [string]: RouteStyle } = {
 	road = { color = Colors.Road, thickness = 3, dash = nil, gap = nil, transparency = 0.2 },
 	river = { color = Colors.River, thickness = 3, dash = nil, gap = nil, transparency = 0.15 },
 	pass = { color = Colors.Pass, thickness = 3, dash = 10, gap = 6, transparency = 0.1 },
@@ -93,7 +101,7 @@ local function circle(parent: Instance, x: number, y: number, radius: number, co
 	return frame
 end
 
-local function segment(parent: Instance, from: Vector2, to: Vector2, style: { [string]: any }, zIndex: number)
+local function segment(parent: Instance, from: Vector2, to: Vector2, style: RouteStyle, zIndex: number)
 	local delta = to - from
 	local length = delta.Magnitude
 	if length <= 0 then
@@ -118,15 +126,16 @@ local function route(parent: Instance, a: Vector2, b: Vector2, kind: string)
 	local from = a + direction * ROUTE_TRIM
 	local to = b - direction * ROUTE_TRIM
 	local length = (to - from).Magnitude
-	if not style.dash then
+	local dash, gap = style.dash, style.gap
+	if not dash or not gap then
 		segment(parent, from, to, style, 5)
 		return
 	end
 	local travelled = 0
 	while travelled < length do
-		local dashEnd = math.min(length, travelled + style.dash)
+		local dashEnd = math.min(length, travelled + dash)
 		segment(parent, from + direction * travelled, from + direction * dashEnd, style, 5)
-		travelled = dashEnd + style.gap
+		travelled = dashEnd + gap
 	end
 end
 
@@ -204,8 +213,9 @@ local function recomputeMaxIncome()
 	maxIncome = 1
 	for _, provinceId in Content.provinceIds do
 		local view = options.store:province(provinceId)
-		if view and view.income and view.income > maxIncome then
-			maxIncome = view.income
+		local income = if view then view.income else nil
+		if type(income) == "number" and income > maxIncome then
+			maxIncome = income
 		end
 	end
 end

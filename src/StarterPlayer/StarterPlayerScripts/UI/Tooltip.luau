@@ -25,12 +25,13 @@ local current: GuiObject? = nil
 local touchHideToken = 0
 
 local function position()
-	if not box or not layer then
+	local currentBox, currentLayer = box, layer
+	if not currentBox or not currentLayer then
 		return
 	end
 	local mouse = UserInputService:GetMouseLocation()
-	local viewport = layer.AbsoluteSize
-	local size = box.AbsoluteSize
+	local viewport = currentLayer.AbsoluteSize
+	local size = currentBox.AbsoluteSize
 	local x = mouse.X + 16
 	local y = mouse.Y + 18
 	if x + size.X > viewport.X then
@@ -39,18 +40,19 @@ local function position()
 	if y + size.Y > viewport.Y then
 		y = mouse.Y - size.Y - 12
 	end
-	box.Position = UDim2.fromOffset(math.max(4, x) / scale, math.max(4, y) / scale)
+	currentBox.Position = UDim2.fromOffset(math.max(4, x) / scale, math.max(4, y) / scale)
 end
 
 local function show(object: GuiObject)
 	local provider = providers[object]
 	local text = provider and provider()
-	if not text or text == "" or not box or not textLabel then
+	local currentBox, label = box, textLabel
+	if not text or text == "" or not currentBox or not label then
 		return
 	end
 	current = object
-	textLabel.Text = text
-	box.Visible = true
+	label.Text = text
+	currentBox.Visible = true
 	position()
 end
 

@@ -156,7 +156,7 @@ function EconomyRules.computeHouseBudget(
 	local houseDefinition = Content.houses[houseId]
 
 	local sorted = table.clone(ownedProvinces)
-	table.sort(sorted, function(a, b)
+	table.sort(sorted, function(a: ProvinceLike, b: ProvinceLike)
 		return a.id < b.id
 	end)
 

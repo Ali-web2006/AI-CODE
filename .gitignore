@@ -12,3 +12,6 @@ roblox.yml
 .DS_Store
 .vscode/
 sourcemap.json
+
+# Type-check tooling dependencies
+node_modules/

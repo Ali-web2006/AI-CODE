@@ -13,13 +13,9 @@ local Content = require(ReplicatedStorage.Shared.Data.Content)
 local DeterministicRng = require(ReplicatedStorage.Shared.Util.DeterministicRng)
 local DiplomacyRules = require(ReplicatedStorage.Shared.Rules.DiplomacyRules)
 local GameTypes = require(ReplicatedStorage.Shared.Types.GameTypes)
+local SimContext = require(script.Parent.SimContext)
 
-type InvariantConfig = {
-	SchemaVersion: number,
-	Clock: { SecondsPerDay: { number } },
-	Economy: { MinDevelopment: number, MaxDevelopment: number, LedgerLength: number },
-	Diplomacy: { MinRelation: number, MaxRelation: number },
-}
+type InvariantConfig = SimContext.Config
 
 local StateInvariants = {}
 

@@ -9,7 +9,7 @@ local TableUtil = {}
 
 function TableUtil.deepCopy<T>(value: T): T
 	if type(value) ~= "table" then
-		return value
+		return (value :: any) :: T
 	end
 	local copy = {}
 	for key, child in value :: any do

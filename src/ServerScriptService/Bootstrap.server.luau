@@ -49,7 +49,9 @@ local host = CampaignHost.new({
 	seed = seed,
 	campaignId = sessionId,
 	now = os.clock,
-	wallClock = os.time,
+	wallClock = function()
+		return os.time()
+	end,
 	diagnostics = diagnostics,
 	repository = persistence.repository,
 	persistence = persistence.status,

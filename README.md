@@ -52,9 +52,13 @@ Access to API Services**. Without that, saves are kept in server memory and the 
 ## Verifying the project
 
 ```bash
-selene generate-roblox-std        # once: Roblox standard library for the linter (roblox.yml)
-mkdir -p build && curl -o build/API-Dump.json \
-  https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/API-Dump.json
+# once
+selene generate-roblox-std                      # Roblox standard library for the linter (roblox.yml)
+mkdir -p build
+curl -o build/API-Dump.json https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/API-Dump.json
+curl -o build/globalTypes.d.luau https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/main/scripts/globalTypes.None.d.luau
+npm --prefix tools/typecheck install            # official Luau analyzer (WASM), for the type check
+
 ./scripts/verify.sh
 ```
 
@@ -65,7 +69,9 @@ mkdir -p build && curl -o build/API-Dump.json \
 * a Rojo build;
 * a check of the built place;
 * a headless UI smoke test that plays the core loop through the real client and server code;
-* a static check of all Roblox API usage against the official API dump.
+* a static check of all Roblox API usage against the official API dump;
+* a strict-mode Luau type check of every script, using the official analyzer and Roblox type
+  definitions.
 
 See [docs/TEST_PLAN.md](docs/TEST_PLAN.md).
 

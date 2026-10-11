@@ -36,4 +36,12 @@ else
 	printf '\n(skipping the Roblox API check: download build/API-Dump.json as described in README.md)\n'
 fi
 
+if [ -d tools/typecheck/node_modules ] && [ -f build/globalTypes.d.luau ]; then
+	step "Strict Luau type check (official analyzer + Roblox definitions)"
+	lune run tools/typecheck/record_requires.luau build/IronThrone.rbxl build/requires.json
+	node tools/typecheck/typecheck.mjs build/requires.json build/globalTypes.d.luau
+else
+	printf '\n(skipping the type check: run npm --prefix tools/typecheck install and download build/globalTypes.d.luau as described in README.md)\n'
+fi
+
 printf '\nAll checks passed.\n'

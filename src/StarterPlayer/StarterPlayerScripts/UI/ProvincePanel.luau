@@ -209,7 +209,7 @@ function ProvincePanel.mount(parent: Frame, ctx: UIContext.Context): UIContext.P
 		UI.sectionHeader("Borders", 9, content)
 		local borders = UI.create("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = 10, Parent = content })
 		UI.list(borders, "vertical", 2)
-		local neighbours = {}
+		local neighbours: { { id: string, kind: string } } = {}
 		for neighbourId, kind in definition.adjacent do
 			table.insert(neighbours, { id = neighbourId, kind = kind })
 		end

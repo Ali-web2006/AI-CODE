@@ -47,9 +47,12 @@ function Signal.Fire(self: Signal, ...: any)
 	-- Snapshot so handlers may disconnect during dispatch.
 	for _, entry in table.clone(self._handlers) do
 		if entry.connection.connected then
-			local ok, err = xpcall(entry.fn, debug.traceback, ...)
+			local failure: string? = nil
+			local ok = xpcall(entry.fn, function(message: any)
+				failure = debug.traceback(tostring(message), 2)
+			end, ...)
 			if not ok then
-				warn(`[IronThrone][Signal] handler failed: {err}`)
+				warn(`[IronThrone][Signal] handler failed: {failure}`)
 			end
 		end
 	end

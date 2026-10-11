@@ -1,0 +1,9 @@
+{
+  "name": "iron-throne-typecheck",
+  "private": true,
+  "description": "Strict Luau type check of the project with the official Luau analyzer (WASM).",
+  "type": "module",
+  "dependencies": {
+    "@luau-rs/luau": "0.739.0"
+  }
+}

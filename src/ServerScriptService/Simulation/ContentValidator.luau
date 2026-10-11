@@ -11,6 +11,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CalendarDate = require(ReplicatedStorage.Shared.Util.CalendarDate)
 local GameTypes = require(ReplicatedStorage.Shared.Types.GameTypes)
+local SimContext = require(script.Parent.SimContext)
 
 export type ContentInput = {
 	terrains: { GameTypes.TerrainDefinition },
@@ -29,11 +30,7 @@ export type Report = {
 	warnings: { string },
 }
 
-type ValidationConfig = {
-	Economy: { MinDevelopment: number, MaxDevelopment: number },
-	Diplomacy: { MinRelation: number, MaxRelation: number },
-	Network: { MaxIdLength: number },
-}
+type ValidationConfig = SimContext.Config
 
 local CONNECTION_KINDS = { road = true, river = true, sea = true, pass = true, wild = true }
 local HERALDRY_DIVISIONS = { plain = true, chief = true, pale = true, fess = true, quarterly = true, bordure = true }

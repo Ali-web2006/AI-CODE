@@ -14,6 +14,8 @@ Testing has two layers:
 selene generate-roblox-std        # creates roblox.yml for linting
 mkdir -p build
 curl -o build/API-Dump.json https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/API-Dump.json
+curl -o build/globalTypes.d.luau https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/main/scripts/globalTypes.None.d.luau
+npm --prefix tools/typecheck install
 
 ./scripts/verify.sh               # runs everything below
 ```
@@ -27,8 +29,14 @@ curl -o build/API-Dump.json https://raw.githubusercontent.com/MaximumADHD/Roblox
 | Place check | `lune run tests/place_check.luau build/IronThrone.rbxl` | The built place has the expected tree; `Players.CharacterAutoLoads` is false; all 69 ModuleScripts (client UI included) resolve their requires and run their top-level code against real Roblox datatypes |
 | UI smoke test | `lune run tests/ui_smoke.luau build/IronThrone.rbxl` | The real client code runs against the real server pipeline. Every property assignment is validated against Roblox's reflection database, buttons are clicked by their text, and the whole core loop is played (§2.J) |
 | API check | `python3 tools/check_roblox_api.py --dump build/API-Dump.json src` | Class names, property keys in `UI.create`, Enum items, services, events and methods exist in the Roblox API dump |
+| Type check | `lune run tools/typecheck/record_requires.luau build/IronThrone.rbxl build/requires.json` then `node tools/typecheck/typecheck.mjs build/requires.json build/globalTypes.d.luau` | Every script type-checks in `--!strict` with the official Luau analyzer (new solver) against luau-lsp's Roblox definitions. Instance-path requires are resolved from recorded call sites, so cross-module types are checked |
 | Balance report | `lune run tests/balance_report.luau 30` | Diagnostic only: 30-year all-AI economy table |
 | House report | `lune run tests/house_report.luau` | Diagnostic only: starting position of every house |
+
+Type-check caveat: Studio's Script Analysis uses its own knowledge of the DataModel. The offline
+check emulates the parts that matter (service and `Instance.new` result types, `Enum` type names,
+`script` paths), but Studio may still word or classify a warning differently, especially if a
+place opts into the older type solver.
 
 Test infrastructure:
 * `tests/harness/VirtualRoblox.luau` mirrors the Rojo tree, so modules run with their real

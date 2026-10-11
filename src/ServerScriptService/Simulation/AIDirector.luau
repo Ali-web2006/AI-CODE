@@ -131,7 +131,7 @@ function AIDirector.candidates(sim: SimContext, houseId: string): ({ Candidate }
 	local reserve = math.max(0, budget.expenses * personality.reserveMonths)
 	local spendable = house.treasury - reserve
 
-	local candidates = {}
+	local candidates: { Candidate } = {}
 	if spendable > 0 then
 		for _, candidate in developmentCandidates(sim, houseId, personality, spendable) do
 			table.insert(candidates, candidate)
@@ -141,7 +141,7 @@ function AIDirector.candidates(sim: SimContext, houseId: string): ({ Candidate }
 		end
 	end
 	-- Deterministic ordering: score descending, then command and payload as tie-breakers.
-	table.sort(candidates, function(a, b)
+	table.sort(candidates, function(a: Candidate, b: Candidate)
 		if a.score ~= b.score then
 			return a.score > b.score
 		end

@@ -210,7 +210,7 @@ function SessionRegistry.list(self: SessionRegistry): { Session }
 	for _, session in self.sessions do
 		table.insert(list, session)
 	end
-	table.sort(list, function(a, b)
+	table.sort(list, function(a: Session, b: Session)
 		return a.joinOrder < b.joinOrder
 	end)
 	return list
