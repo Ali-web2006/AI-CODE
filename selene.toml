@@ -1,0 +1,7 @@
+# Selene lint configuration. `std = "roblox"` requires a generated roblox.yml:
+#   selene generate-roblox-std
+std = "roblox"
+
+[lints]
+# Luau type annotations make shadowed locals and unused results intentional in places.
+shadowing = "allow"

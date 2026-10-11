@@ -1,0 +1,382 @@
+--!strict
+--[[
+	Province geography for the Seven Kingdoms map.
+
+	This file is pure geography: stable id, name, region, terrain, principal holding, map position,
+	economic base value and adjacency. Who OWNS a province and how developed it is belongs to a
+	bookmark (Data/Bookmarks), because those differ between start dates.
+
+	position: map units on the canvas defined in MapDefinition (x right, y down).
+	baseTax:  gold per month before development, terrain and holding modifiers.
+	adjacent: neighbour id -> connection kind ("road", "river", "sea", "pass", "wild").
+	          Adjacency must be symmetric with the same kind on both sides; the ContentValidator
+	          rejects the campaign on startup otherwise.
+
+	Strategic chokepoints: Moat Cailin is the only land route between the North and the south;
+	the Bloody Gate guards the Vale; the Golden Tooth links the Westerlands to the Riverlands;
+	Kingsgrave (Prince's Pass) and Yronwood (the Boneway) are the only land routes into Dorne.
+]]
+
+local GameTypes = require(script.Parent.Parent.Parent.Types.GameTypes)
+
+local definitions: { GameTypes.ProvinceDefinition } = {
+	-- The North -------------------------------------------------------------------------------
+	{
+		id = "winterfell",
+		name = "Winterfell",
+		regionId = "north",
+		terrainId = "plains",
+		holding = { kind = "castle", name = "Winterfell", description = "Ancestral seat of the Kings in the North, warmed by hot springs." },
+		position = { x = 470, y = 330 },
+		baseTax = 4.5,
+		adjacent = { wolfswood = "road", dreadfort = "road", white_harbor = "road", barrowlands = "road" },
+	},
+	{
+		id = "wolfswood",
+		name = "The Wolfswood",
+		regionId = "north",
+		terrainId = "forest",
+		holding = { kind = "castle", name = "Deepwood Motte", description = "A timber keep on a hill above the endless pines." },
+		position = { x = 300, y = 300 },
+		baseTax = 2.0,
+		adjacent = { winterfell = "road", barrowlands = "wild", harlaw = "sea" },
+	},
+	{
+		id = "dreadfort",
+		name = "The Dreadfort",
+		regionId = "north",
+		terrainId = "hills",
+		holding = { kind = "castle", name = "The Dreadfort", description = "Grim towers above the Weeping Water." },
+		position = { x = 640, y = 250 },
+		baseTax = 2.5,
+		adjacent = { winterfell = "road", white_harbor = "road" },
+	},
+	{
+		id = "white_harbor",
+		name = "White Harbor",
+		regionId = "north",
+		terrainId = "coast",
+		holding = { kind = "port", name = "White Harbor", description = "The North's only true city, at the mouth of the White Knife." },
+		position = { x = 590, y = 470 },
+		baseTax = 4.5,
+		adjacent = { winterfell = "road", dreadfort = "road", barrowlands = "road", moat_cailin = "road", gulltown = "sea" },
+	},
+	{
+		id = "barrowlands",
+		name = "The Barrowlands",
+		regionId = "north",
+		terrainId = "hills",
+		holding = { kind = "castle", name = "Barrow Hall", description = "A hall raised against the First King's barrow." },
+		position = { x = 390, y = 480 },
+		baseTax = 2.0,
+		adjacent = { winterfell = "road", wolfswood = "wild", white_harbor = "road", moat_cailin = "road" },
+	},
+	{
+		id = "moat_cailin",
+		name = "Moat Cailin",
+		regionId = "north",
+		terrainId = "marsh",
+		holding = { kind = "fortress", name = "Moat Cailin", description = "Ruined towers astride the causeway through the Neck. The key to the North." },
+		position = { x = 480, y = 600 },
+		baseTax = 1.2,
+		adjacent = { barrowlands = "road", white_harbor = "road", the_twins = "road" },
+	},
+
+	-- The Iron Islands ------------------------------------------------------------------------
+	{
+		id = "harlaw",
+		name = "Harlaw",
+		regionId = "iron_islands",
+		terrainId = "island",
+		holding = { kind = "castle", name = "Ten Towers", description = "The richest and most populous of the isles." },
+		position = { x = 250, y = 640 },
+		baseTax = 2.5,
+		adjacent = { wolfswood = "sea", pyke = "sea", seagard = "sea" },
+	},
+	{
+		id = "pyke",
+		name = "Pyke",
+		regionId = "iron_islands",
+		terrainId = "island",
+		holding = { kind = "castle", name = "Pyke", description = "Towers on sea stacks joined by swaying bridges." },
+		position = { x = 190, y = 720 },
+		baseTax = 2.5,
+		adjacent = { harlaw = "sea", lannisport = "sea" },
+	},
+
+	-- The Riverlands --------------------------------------------------------------------------
+	{
+		id = "seagard",
+		name = "Seagard",
+		regionId = "riverlands",
+		terrainId = "coast",
+		holding = { kind = "port", name = "Seagard", description = "Raised to watch for raiders from the Iron Islands." },
+		position = { x = 370, y = 690 },
+		baseTax = 3.0,
+		adjacent = { harlaw = "sea", the_twins = "road", riverrun = "road" },
+	},
+	{
+		id = "the_twins",
+		name = "The Twins",
+		regionId = "riverlands",
+		terrainId = "plains",
+		holding = { kind = "castle", name = "The Twins", description = "Twin castles controlling the only bridge across the Green Fork. Every crossing pays a toll." },
+		position = { x = 480, y = 700 },
+		baseTax = 3.5,
+		adjacent = { moat_cailin = "road", seagard = "road", riverrun = "river", harrenhal = "road", bloody_gate = "road" },
+	},
+	{
+		id = "riverrun",
+		name = "Riverrun",
+		regionId = "riverlands",
+		terrainId = "plains",
+		holding = { kind = "castle", name = "Riverrun", description = "Seat of House Tully where the Tumblestone meets the Red Fork." },
+		position = { x = 420, y = 820 },
+		baseTax = 4.0,
+		adjacent = { seagard = "road", the_twins = "river", harrenhal = "river", golden_tooth = "pass" },
+	},
+	{
+		id = "harrenhal",
+		name = "Harrenhal",
+		regionId = "riverlands",
+		terrainId = "plains",
+		holding = { kind = "castle", name = "Harrenhal", description = "The largest castle in Westeros, melted by dragonfire and said to be cursed." },
+		position = { x = 560, y = 840 },
+		baseTax = 3.0,
+		adjacent = { the_twins = "road", riverrun = "river", duskendale = "road", kings_landing = "road" },
+	},
+
+	-- The Vale --------------------------------------------------------------------------------
+	{
+		id = "bloody_gate",
+		name = "The Bloody Gate",
+		regionId = "vale",
+		terrainId = "mountains",
+		holding = { kind = "fortress", name = "The Bloody Gate", description = "A narrow pass where a handful may hold back an army." },
+		position = { x = 640, y = 760 },
+		baseTax = 1.5,
+		adjacent = { the_twins = "road", the_eyrie = "pass", gulltown = "road" },
+	},
+	{
+		id = "the_eyrie",
+		name = "The Eyrie",
+		regionId = "vale",
+		terrainId = "mountains",
+		holding = { kind = "castle", name = "The Eyrie", description = "Perched atop the Giant's Lance; it has never been taken by force." },
+		position = { x = 720, y = 700 },
+		baseTax = 3.5,
+		adjacent = { bloody_gate = "pass", gulltown = "road" },
+	},
+	{
+		id = "gulltown",
+		name = "Gulltown",
+		regionId = "vale",
+		terrainId = "coast",
+		holding = { kind = "port", name = "Gulltown", description = "The Vale's great harbour on the Bay of Crabs." },
+		position = { x = 800, y = 790 },
+		baseTax = 5.0,
+		adjacent = { bloody_gate = "road", the_eyrie = "road", white_harbor = "sea", dragonstone = "sea" },
+	},
+
+	-- The Westerlands -------------------------------------------------------------------------
+	{
+		id = "golden_tooth",
+		name = "The Golden Tooth",
+		regionId = "westerlands",
+		terrainId = "mountains",
+		holding = { kind = "fortress", name = "The Golden Tooth", description = "A gold-rich fortress guarding the pass to the Riverlands." },
+		position = { x = 330, y = 850 },
+		baseTax = 3.0,
+		adjacent = { riverrun = "pass", casterly_rock = "road" },
+	},
+	{
+		id = "casterly_rock",
+		name = "Casterly Rock",
+		regionId = "westerlands",
+		terrainId = "hills",
+		holding = { kind = "castle", name = "Casterly Rock", description = "A mountain of stone above the Sunset Sea, riddled with gold mines." },
+		position = { x = 210, y = 900 },
+		baseTax = 6.0,
+		adjacent = { golden_tooth = "road", lannisport = "road", crakehall = "road" },
+	},
+	{
+		id = "lannisport",
+		name = "Lannisport",
+		regionId = "westerlands",
+		terrainId = "coast",
+		holding = { kind = "port", name = "Lannisport", description = "The wealthy port city in the shadow of the Rock." },
+		position = { x = 240, y = 985 },
+		baseTax = 5.0,
+		adjacent = { casterly_rock = "road", crakehall = "road", pyke = "sea", oldtown = "sea" },
+	},
+	{
+		id = "crakehall",
+		name = "Crakehall",
+		regionId = "westerlands",
+		terrainId = "plains",
+		holding = { kind = "castle", name = "Crakehall", description = "A southern Westerlands seat astride the Gold Road." },
+		position = { x = 310, y = 1060 },
+		baseTax = 2.5,
+		adjacent = { casterly_rock = "road", lannisport = "road", bitterbridge = "road", highgarden = "road" },
+	},
+
+	-- The Crownlands --------------------------------------------------------------------------
+	{
+		id = "duskendale",
+		name = "Duskendale",
+		regionId = "crownlands",
+		terrainId = "coast",
+		holding = { kind = "port", name = "Duskendale", description = "A prosperous port on Blackwater Bay." },
+		position = { x = 705, y = 895 },
+		baseTax = 3.0,
+		adjacent = { harrenhal = "road", kings_landing = "road", dragonstone = "sea" },
+	},
+	{
+		id = "dragonstone",
+		name = "Dragonstone",
+		regionId = "crownlands",
+		terrainId = "island",
+		holding = { kind = "castle", name = "Dragonstone", description = "Ancient Targaryen fortress of black stone shaped like dragons." },
+		position = { x = 830, y = 915 },
+		baseTax = 2.0,
+		adjacent = { duskendale = "sea", kings_landing = "sea", gulltown = "sea", storms_end = "sea" },
+	},
+	{
+		id = "kings_landing",
+		name = "King's Landing",
+		regionId = "crownlands",
+		terrainId = "coast",
+		holding = { kind = "city", name = "King's Landing", description = "The capital of the Seven Kingdoms and seat of the Iron Throne." },
+		position = { x = 650, y = 990 },
+		baseTax = 7.5,
+		adjacent = { harrenhal = "road", duskendale = "road", dragonstone = "sea", bitterbridge = "road", bronzegate = "road" },
+	},
+
+	-- The Stormlands --------------------------------------------------------------------------
+	{
+		id = "bronzegate",
+		name = "Bronzegate",
+		regionId = "stormlands",
+		terrainId = "forest",
+		holding = { kind = "castle", name = "Bronzegate", description = "A keep on the Kingsroad at the edge of the Kingswood." },
+		position = { x = 670, y = 1085 },
+		baseTax = 2.5,
+		adjacent = { kings_landing = "road", storms_end = "road", the_marches = "road" },
+	},
+	{
+		id = "storms_end",
+		name = "Storm's End",
+		regionId = "stormlands",
+		terrainId = "coast",
+		holding = { kind = "castle", name = "Storm's End", description = "A colossal drum tower that has weathered every storm and siege." },
+		position = { x = 790, y = 1120 },
+		baseTax = 3.5,
+		adjacent = { bronzegate = "road", the_marches = "road", dragonstone = "sea", sunspear = "sea" },
+	},
+	{
+		id = "the_marches",
+		name = "The Dornish Marches",
+		regionId = "stormlands",
+		terrainId = "hills",
+		holding = { kind = "castle", name = "Nightsong", description = "A marcher castle watching the Boneway." },
+		position = { x = 590, y = 1200 },
+		baseTax = 2.0,
+		adjacent = { bronzegate = "road", storms_end = "road", horn_hill = "road", yronwood = "pass" },
+	},
+
+	-- The Reach -------------------------------------------------------------------------------
+	{
+		id = "bitterbridge",
+		name = "Bitterbridge",
+		regionId = "reach",
+		terrainId = "farmlands",
+		holding = { kind = "castle", name = "Bitterbridge", description = "Where the Roseroad crosses the Mander." },
+		position = { x = 500, y = 1060 },
+		baseTax = 3.0,
+		adjacent = { crakehall = "road", kings_landing = "road", highgarden = "river" },
+	},
+	{
+		id = "highgarden",
+		name = "Highgarden",
+		regionId = "reach",
+		terrainId = "farmlands",
+		holding = { kind = "castle", name = "Highgarden", description = "Seat of House Tyrell amid the most fertile land in Westeros." },
+		position = { x = 370, y = 1190 },
+		baseTax = 6.0,
+		adjacent = { bitterbridge = "river", crakehall = "road", horn_hill = "road", oldtown = "road" },
+	},
+	{
+		id = "horn_hill",
+		name = "Horn Hill",
+		regionId = "reach",
+		terrainId = "hills",
+		holding = { kind = "castle", name = "Horn Hill", description = "A hill fortress commanding the approach to the Prince's Pass." },
+		position = { x = 465, y = 1275 },
+		baseTax = 2.0,
+		adjacent = { highgarden = "road", the_marches = "road", oldtown = "road", kingsgrave = "pass" },
+	},
+	{
+		id = "oldtown",
+		name = "Oldtown",
+		regionId = "reach",
+		terrainId = "coast",
+		holding = { kind = "city", name = "Oldtown", description = "The oldest city in Westeros, home of the Citadel and the Hightower." },
+		position = { x = 240, y = 1330 },
+		baseTax = 6.5,
+		adjacent = { highgarden = "road", horn_hill = "road", the_arbor = "sea", lannisport = "sea" },
+	},
+	{
+		id = "the_arbor",
+		name = "The Arbor",
+		regionId = "reach",
+		terrainId = "island",
+		holding = { kind = "port", name = "Ryamsport", description = "Vineyard isle famed for its golden wine and its fleet." },
+		position = { x = 150, y = 1420 },
+		baseTax = 3.5,
+		adjacent = { oldtown = "sea" },
+	},
+
+	-- Dorne -----------------------------------------------------------------------------------
+	{
+		id = "kingsgrave",
+		name = "The Prince's Pass",
+		regionId = "dorne",
+		terrainId = "mountains",
+		holding = { kind = "fortress", name = "Kingsgrave", description = "A fortress where the Red Mountains open onto the Reach." },
+		position = { x = 545, y = 1335 },
+		baseTax = 1.5,
+		adjacent = { horn_hill = "pass", yronwood = "road", the_greenblood = "road" },
+	},
+	{
+		id = "yronwood",
+		name = "Yronwood",
+		regionId = "dorne",
+		terrainId = "mountains",
+		holding = { kind = "castle", name = "Yronwood", description = "A proud castle at the Dornish end of the Boneway." },
+		position = { x = 690, y = 1290 },
+		baseTax = 2.0,
+		adjacent = { the_marches = "pass", kingsgrave = "road", the_greenblood = "road" },
+	},
+	{
+		id = "the_greenblood",
+		name = "The Greenblood",
+		regionId = "dorne",
+		terrainId = "desert",
+		holding = { kind = "castle", name = "Godsgrace", description = "A river castle in the green ribbon of Dorne's only great river." },
+		position = { x = 700, y = 1395 },
+		baseTax = 3.0,
+		adjacent = { kingsgrave = "road", yronwood = "road", sunspear = "river" },
+	},
+	{
+		id = "sunspear",
+		name = "Sunspear",
+		regionId = "dorne",
+		terrainId = "desert",
+		holding = { kind = "port", name = "Sunspear", description = "Seat of the Princes of Dorne, beside the shadow city." },
+		position = { x = 835, y = 1420 },
+		baseTax = 4.0,
+		adjacent = { the_greenblood = "river", storms_end = "sea" },
+	},
+}
+
+return definitions

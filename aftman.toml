@@ -1,0 +1,6 @@
+# Toolchain versions used to develop and verify this project.
+# Install with Aftman: `aftman install`.
+[tools]
+rojo = "rojo-rbx/rojo@7.7.1"
+lune = "lune-org/lune@0.10.5"
+selene = "Kampfkarren/selene@0.31.0"
