@@ -160,6 +160,22 @@ end
 function methods.GetPropertyChangedSignal(self, name)
 	return signalFor(self, `prop:{name}`)
 end
+-- Path2D's control points are a datatype Lune does not have; the shim keeps them on the proxy.
+local controlPoints = setmetatable({}, { __mode = "k" })
+function methods.SetControlPoints(self, points)
+	assert(reals[self].ClassName == "Path2D", "SetControlPoints on a non-Path2D")
+	assert(type(points) == "table" and #points >= 2, "a Path2D needs at least two control points")
+	for _, point in points do
+		assert(type(point) == "table" and point.isControlPoint, "control points must be Path2DControlPoint values")
+	end
+	controlPoints[self] = points
+end
+function methods.GetControlPoints(self)
+	return controlPoints[self] or {}
+end
+function methods.GetMaxControlPoints(_self)
+	return 64 -- small, so the test also exercises splitting long outlines
+end
 function methods.InvokeServer(self, ...)
 	local route = remoteRouter[reals[self].Name]
 	assert(route, `no server route for remote {reals[self].Name}`)
@@ -306,6 +322,12 @@ local function requireModule(module)
 	for _, name in datatypes do
 		env[name] = (roblox :: any)[name]
 	end
+	env.Path2DControlPoint = {
+		new = function(position, left, right)
+			assert(typeof(position) == "UDim2", "Path2DControlPoint position must be a UDim2")
+			return { isControlPoint = true, Position = position, LeftTangent = left, RightTangent = right }
+		end,
+	}
 	-- Lune has no TweenInfo datatype; tweens are inert in this test (TweenService is faked).
 	env.TweenInfo = {
 		new = function(...)
@@ -495,6 +517,68 @@ check(riverrunNode ~= nil, "map has a node for Riverrun")
 click(riverrunNode)
 check(findByText("House Tully", "TextLabel") ~= nil, "province panel shows Riverrun's owner")
 check(findByText("Develop (44 gold)", "TextButton") == nil, "no Develop button on a foreign province")
+
+-- The world map: drawn land, crests and labels, then a click and a hover on the land itself.
+local MapData = requirePath("ReplicatedStorage.Shared.Data.World.MapData")
+local Content = requirePath("ReplicatedStorage.Shared.Data.Content")
+local mapRoot = guiRoot():FindFirstChild("Map", true)
+local fills = mapRoot:FindFirstChild("Fills")
+local land = fills and fills:FindFirstChild("Land")
+local wedgeCount = 0
+for _, part in reals[land]:GetChildren() do
+	if part.ClassName == "WedgePart" then
+		wedgeCount += 1
+	end
+end
+check(wedgeCount > 4000, `map land is drawn with flat triangles ({wedgeCount} wedges)`)
+local crestCount = 0
+for _, house in MapData.houses do
+	local crest = mapRoot:FindFirstChild(`Crest_{house.id}`, true)
+	if crest and #reals[crest]:FindFirstChild("Art"):GetChildren() > 0 then
+		crestCount += 1
+	end
+end
+check(crestCount == 9, `all nine great-house crests are drawn ({crestCount})`)
+check(findByText("STARK", "TextLabel") ~= nil and findByText("TARGARYEN", "TextLabel") ~= nil, "great-house labels are shown")
+local subBorders = mapRoot:FindFirstChild("SubBorders", true)
+local paths = 0
+for _, line in reals[subBorders]:GetChildren() do
+	if line.ClassName == "Path2D" then
+		paths += 1
+	end
+end
+check(paths >= #MapData.subTerritories, `sub-territory borders are drawn ({paths} paths)`)
+
+-- Screen position of a map point, from the canvas the controller placed (UI scale is 1 here).
+local function screenAt(x: number, y: number)
+	local canvas = mapRoot:FindFirstChild("Canvas")
+	local zoom = canvas.Size.X.Offset / MapData.width
+	return roblox.Vector3.new(canvas.Position.X.Offset + x * zoom, canvas.Position.Y.Offset + y * zoom, 0)
+end
+local UserInputService = services.UserInputService
+local harrenhal = Content.provinces.harrenhal.position
+local press = { UserInputType = roblox.Enum.UserInputType.MouseButton1, Position = screenAt(harrenhal.x, harrenhal.y) }
+mapRoot:FindFirstChild("DragCatcher").InputBegan:Fire(press)
+UserInputService.InputEnded:Fire(press)
+pump()
+check(findContaining("of Harrenhal ·") ~= nil, "clicking the land of Harrenhal selects it")
+check(#reals[mapRoot:FindFirstChild("Selection", true)]:GetChildren() > 0, "the selected province is outlined")
+
+mapRoot.MouseEnter:Fire()
+local eyrie = Content.provinces.the_eyrie.position
+UserInputService.InputChanged:Fire({ UserInputType = roblox.Enum.UserInputType.MouseMovement, Position = screenAt(eyrie.x, eyrie.y) })
+check(mapRoot:FindFirstChild("Glow_vale", true).Visible == true, "hovering the Vale outlines the whole region")
+check(mapRoot:FindFirstChild("Glow_north", true).Visible == false, "other regions are not outlined")
+UserInputService.InputChanged:Fire({ UserInputType = roblox.Enum.UserInputType.MouseMovement, Position = screenAt(990, 20) })
+check(mapRoot:FindFirstChild("Glow_vale", true).Visible == false, "moving over the sea clears the hover")
+mapRoot.MouseLeave:Fire()
+
+click(findByText("Sub-territory borders: on", "TextButton"))
+check(subBorders.Visible == false, "the sub-territory border toggle hides the thin borders")
+click(findByText("Sub-territory borders: off", "TextButton"))
+check(subBorders.Visible == true, "and shows them again")
+click(findByText("Terrain", "TextButton"))
+click(findByText("Houses", "TextButton"))
 
 -- Diplomacy: send an envoy to House Lannister.
 click(findByText("Diplomacy", "TextButton"))

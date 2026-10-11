@@ -46,7 +46,7 @@ function ProvincePanel.mount(parent: Frame, ctx: UIContext.Context): UIContext.P
 	local function renderEmpty()
 		UI.label({ text = "The Realm", size = Theme.TextSize.Title, font = Fonts.Heading, order = 1, parent = content })
 		UI.label({
-			text = "Select a province on the map to inspect it. Your provinces have a gold outline; the small badge on each marker is its development level.",
+			text = "Select a province on the map to inspect it: click its land or its castle. Your provinces have a thin gold outline, the selected one a thick one.",
 			wrap = true,
 			color = Colors.InkMuted,
 			order = 2,

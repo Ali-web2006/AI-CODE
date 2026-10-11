@@ -178,12 +178,10 @@ export type BookmarkDefinition = {
 	characters: { CharacterDefinition },
 }
 
+-- The world map canvas in map units (presentation only; the drawing itself is Data/World/MapData).
 export type MapDefinition = {
 	width: number,
 	height: number,
-	-- Overlapping circles that approximate the landmass silhouette (presentation only).
-	landmass: { { x: number, y: number, r: number } },
-	labels: { { text: string, x: number, y: number } },
 }
 
 -- Campaign state ----------------------------------------------------------------------------

@@ -24,7 +24,8 @@ see [docs/PHASES.md](docs/PHASES.md). The manual Studio playtest in
   commands players use.
 * **Saves:** versioned save/load with revision-conflict protection, retries, and a labelled
   in-memory fallback when DataStores are unavailable.
-* **Interface:** a parchment-and-charcoal UI with a pannable, zoomable map, four map modes,
+* **Interface:** a parchment-and-charcoal UI with a pannable, zoomable political map of the nine
+  great houses (flat house colours, crests, castles and ports, hover highlights), five map modes,
   tooltips that explain every number, and a chronicle. It is responsive, with a compact layout
   and touch support.
 
@@ -64,7 +65,7 @@ npm --prefix tools/typecheck install            # official Luau analyzer (WASM),
 
 `verify.sh` runs:
 * a compile check of every file;
-* the 73 scenario tests;
+* the 81 scenario tests;
 * Selene;
 * a Rojo build;
 * a check of the built place;
@@ -85,7 +86,8 @@ src/StarterPlayer/...          ClientBootstrap + Controllers (net, state, map, U
 tests/                         Lune test runner, harness, specs A–J, place check, UI smoke test, reports
 tools/check_roblox_api.py      static Roblox API usage check
 tools/typecheck/               strict Luau type check (official analyzer + Roblox definitions)
-tools/render_map_preview.py    PNG preview of the map from content data
+tools/mapgen/                  map geometry generator (traces a reference map) and the house sigils
+tools/render_map_preview.py    PNG preview of the world map from MapData and SigilArt
 docs/                          ARCHITECTURE, GAME_DESIGN, PHASES, TEST_PLAN
 ```
 
@@ -100,5 +102,7 @@ docs/                          ARCHITECTURE, GAME_DESIGN, PHASES, TEST_PLAN
 ## Content note
 
 House names, places and characters reference George R. R. Martin's *A Song of Ice and Fire*.
-All visuals are original placeholders: procedural shields, shape markers and a circle-built map.
-No artwork, audio or models from the books or the television series are included.
+The world map's outlines were traced with `tools/mapgen` from a reference political map supplied
+for this project; the image itself is not part of the repository. Map crests are original flat
+vector drawings and lobby shields are procedural. No artwork, audio or models from the books or
+the television series are included.

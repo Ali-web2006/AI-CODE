@@ -22,7 +22,7 @@ Design pillars:
 ## Phase 1 slice: what the player does
 
 1. Choose one of ten houses. Each card shows its real starting position.
-2. Read the realm: the map, your provinces (gold outlines) and your neighbours.
+2. Read the realm: the map, your provinces (thin gold outlines) and your neighbours.
 3. Start the clock. Every month, the server settles income and expenses.
 4. Invest gold to develop provinces, trading money now for income later.
 5. Send envoys to improve relations with neighbours and rivals.
@@ -180,17 +180,31 @@ Balance over a 30-year all-AI run (`tests/balance_report.luau`):
   * the Golden Tooth
   * Kingsgrave (Prince's Pass)
   * Yronwood (the Boneway)
+* The drawing (Data/World/MapData.luau, a single configuration file):
+  * a political map of the nine great houses in a 1000 x 1900 viewBox, traced from a reference
+    map: Stark, Arryn, Tully, Greyjoy, Lannister, Tyrell, Baratheon, Targaryen (the Crownlands
+    and Dragonstone) and Martell, each with its exact palette;
+  * every region is split into 4-10 unnamed sub-territories shaded from its house's palette;
+    each sub-territory belongs to one of the game's 34 provinces, so clicking land selects it;
+  * Beyond the Wall (flat grey), the Wall (a black band across the continent at y 80-130), the
+    Gift (black, just south of it) and the Stepstones;
+  * a heater-shield crest per great house (flat vector sigils), two-line "HOUSE / NAME" labels,
+    and icons for seats (castle), cities (house), ports (anchor) and landmarks (tower).
+* The drawing is presentation only. Who holds a province is game state: in 297 AC House Baratheon
+  holds the Crownlands and Dragonstone (House Targaryen appears on the map only), and the Freys
+  and Boltons hold provinces inside the Tully and Stark regions.
 * Map modes:
-  * Realm: owner colours, with gold outlines on your own provinces.
+  * Houses (default): the great houses' palettes.
+  * Realm: the colour of the house that holds each province today.
   * Relations: green to grey to red, relative to your house.
   * Wealth: monthly income.
   * Terrain.
-* Holding markers:
-  * square: castle
-  * diamond: fortress
-  * circle: city
-  * ring: port
-* The badge on each marker shows its development level.
+* Gold outlines: thin around your own provinces, thick around the selected one.
+* Detail by zoom: crests and great-house labels are always shown (crests fade when zoomed far
+  in); location icons appear from a medium zoom and their names from a closer one. A toggle
+  hides the thin sub-territory borders.
+* Hovering land brightens the sub-territory, outlines the whole region and shows a tooltip with
+  the region, its great house and the province's current owner, development and income.
 
 ## Interface
 

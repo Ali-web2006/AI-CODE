@@ -12,7 +12,7 @@ src/
 │   ├── Config/GameConfig.luau        Every tunable constant (deep-frozen)
 │   ├── Types/GameTypes.luau          Typed schema: definitions, campaign state, commands, events
 │   ├── Data/                         Immutable content
-│   │   ├── World/                    Provinces, terrain, holdings, regions, map silhouette
+│   │   ├── World/                    Provinces, terrain, holdings, regions, MapData, SigilArt
 │   │   ├── Houses/                   House identities and heraldry
 │   │   ├── Characters/               Traits, cultures, faiths
 │   │   ├── Bookmarks/                Scenarios: start date, rulers, ownership, relations, characters
@@ -253,12 +253,22 @@ field by field).
   One `UIScale` fits the 1280×720 design to any screen. Below 1100 virtual pixels of width, a
   compact layout narrows the navigation rail and the panel, which can also be hidden. Each panel
   updates in isolation, so one failing view cannot stop the others.
-* `MapController`:
-  * Geometry layer, scaled by `UIScale`: landmass, coastline, territory halos, routes, labels.
-  * Symbol layer, positioned in screen space: province markers stay readable and tappable at
-    any zoom.
-  * Input: drag or touch to pan; wheel, pinch or buttons to zoom.
-  * Four map modes: realm, relations, wealth, terrain.
+* `MapController` draws `Data/World/MapData` (outlines, palettes, crests, locations):
+  * Fills: Roblox GUI has no polygon fill, so a `ViewportFrame` looks straight down at flat
+    triangles (`UI/FlatTriangles`: two WedgeParts per triangle, full ambient light, so colours
+    are exact). Outlines are triangulated by `Shared/Util/Polygon` (ear clipping) at startup.
+  * Canvas: a map-sized frame moved and resized with the view. Its children are placed in scale
+    units, so panning and zooming need no per-element work: borders and highlights (`Path2D`,
+    constant on-screen width), crests (`UI/SigilView`), location icons (`UI/MapIcons`) and labels.
+    The `ViewportFrame` camera is recomputed from the same zoom and offset.
+  * Interaction: hover hit-tests the sub-territories (bounding box, then point in polygon) to
+    brighten one, outline its region and feed the tooltip; a click selects the sub-territory's
+    province through `onSelect`, exactly as the old province markers did.
+  * Drawing rules (border weights, zoom thresholds, crest and label sizes) live in
+    `UI/MapStyle`; `tools/render_map_preview.py` mirrors them.
+  * Five map modes: houses, realm, relations, wealth, terrain.
+* `tools/mapgen/generate_map.py` regenerates the outline block of `MapData` from the reference
+  map; `tools/mapgen/build_sigils.py` regenerates `SigilArt` from `tools/mapgen/sigils/*.py`.
 
 ## 10. Diagnostics
 

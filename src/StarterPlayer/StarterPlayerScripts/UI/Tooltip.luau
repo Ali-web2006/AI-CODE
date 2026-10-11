@@ -16,6 +16,7 @@ type Provider = () -> string?
 
 local providers: { [GuiObject]: Provider } = setmetatable({}, { __mode = "k" }) :: any
 local bound: { [GuiObject]: boolean } = setmetatable({}, { __mode = "k" }) :: any
+local pointerOver: { [GuiObject]: boolean } = setmetatable({}, { __mode = "k" }) :: any
 
 local layer: Frame? = nil
 local box: Frame? = nil
@@ -131,9 +132,11 @@ function Tooltip.bind(object: GuiObject, provider: Provider)
 	end
 	bound[object] = true
 	object.MouseEnter:Connect(function()
+		pointerOver[object] = true
 		show(object)
 	end)
 	object.MouseLeave:Connect(function()
+		pointerOver[object] = nil
 		hide(object)
 	end)
 	object.TouchLongPress:Connect(function(_positions, state)
@@ -153,6 +156,22 @@ function Tooltip.bind(object: GuiObject, provider: Provider)
 			hide(object)
 		end
 	end)
+end
+
+-- Re-reads the provider of an object under the pointer, for objects whose tooltip depends on
+-- where the pointer is inside them (the map). Shows, updates or hides the tooltip accordingly.
+function Tooltip.refresh(object: GuiObject)
+	if not pointerOver[object] then
+		hide(object)
+		return
+	end
+	local provider = providers[object]
+	local text = provider and provider()
+	if text and text ~= "" then
+		show(object)
+	else
+		hide(object)
+	end
 end
 
 -- Fixed tooltip text; nil removes the tooltip content.

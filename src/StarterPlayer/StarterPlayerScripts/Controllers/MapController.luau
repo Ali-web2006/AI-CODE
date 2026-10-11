@@ -1,17 +1,25 @@
 --!strict
 --[[
-	MapController — the strategic map.
+	MapController — the world map: a political map of the nine great houses drawn from
+	Data/World/MapData (outlines, palettes, crests, locations) and the replicated game state.
 
 	Layers inside the map container (bottom to top):
-	  DragCatcher  transparent button that receives pan/click input on empty map
-	  Canvas       geometry in map units, scaled by a UIScale for zoom: sea, coastline, landmass,
-	               territory halos, routes between adjacent provinces, region labels
-	  Symbols      province nodes positioned in screen space (constant size at every zoom, so they
-	               stay readable and easy to tap)
-	  Overlay      map-mode selector, legend and zoom buttons
+	  Fills        ViewportFrame looking straight down at flat triangles (FlatTriangles): one
+	               flat colour per sub-territory and special feature, on the ocean colour
+	  DragCatcher  transparent button that receives pan, click and hover input
+	  Canvas       map-sized frame moved and resized with the view; its children are placed in
+	               scale units, so panning and zooming need no per-element work:
+	                 borders (Path2D: constant on-screen width), hover glow, selection and
+	                 own-province outlines, crests (SigilView), location icons and labels,
+	                 great-house and feature labels
+	  Overlay      map modes, legend, sub-territory border toggle, zoom buttons
 
-	All province data shown comes from the replicated server state; static geometry comes from
-	shared Content. Map modes: realm (owner), relations (to your house), wealth (income), terrain.
+	Interaction: hovering a sub-territory brightens it, outlines its whole region and shows a
+	tooltip; clicking it (or a location) selects its province through options.onSelect; clicking
+	the sea clears the selection. Drag or touch to pan, wheel or pinch to zoom, within limits.
+
+	Map modes: "houses" (the great houses' palettes, the default), "realm" (current owner),
+	"relations" (towards your house), "wealth" (income) and "terrain".
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -19,7 +27,13 @@ local UserInputService = game:GetService("UserInputService")
 
 local Content = require(ReplicatedStorage.Shared.Data.Content)
 local GameConfig = require(ReplicatedStorage.Shared.Config.GameConfig)
+local MapData = require(ReplicatedStorage.Shared.Data.World.MapData)
+local Polygon = require(ReplicatedStorage.Shared.Util.Polygon)
+local FlatTriangles = require(script.Parent.Parent.UI.FlatTriangles)
 local Format = require(script.Parent.Parent.UI.Format)
+local MapIcons = require(script.Parent.Parent.UI.MapIcons)
+local MapStyle = require(script.Parent.Parent.UI.MapStyle)
+local SigilView = require(script.Parent.Parent.UI.SigilView)
 local Theme = require(script.Parent.Parent.UI.Theme)
 local Tooltip = require(script.Parent.Parent.UI.Tooltip)
 local UI = require(script.Parent.Parent.UI.UIComponents)
@@ -28,7 +42,7 @@ local ReplicaStore = require(script.Parent.ReplicaStore)
 local Colors = Theme.Colors
 local Fonts = Theme.Fonts
 
-export type MapMode = "realm" | "relations" | "wealth" | "terrain"
+export type MapMode = "houses" | "realm" | "relations" | "wealth" | "terrain"
 
 export type Options = {
 	store: ReplicaStore.ReplicaStore,
@@ -36,178 +50,126 @@ export type Options = {
 	onSelect: (provinceId: string?) -> (),
 }
 
-type Node = {
-	button: TextButton,
-	marker: Frame,
-	markerStroke: UIStroke,
-	badge: TextLabel,
-	ring: Frame,
-	halo: Frame,
-	hoverScale: UIScale,
+-- Path2D strokes are opaque (scripts cannot set Path2D.Transparency).
+type Stroke = { color: Color3, thickness: number }
+
+type Sub = {
+	data: MapData.SubTerritory,
+	region: MapData.Region,
+	house: MapData.House,
+	baseColor: Color3,
+	color: Color3,
+	wedges: { WedgePart },
+	bounds: { Polygon.Bounds },
 }
+
+type HouseLabel = { holder: Frame, house: TextLabel, name: TextLabel }
+type LocationNode = { button: TextButton, label: TextLabel }
+type FeatureLabel = { label: TextLabel }
 
 local MapController = {}
 
-local MAP_WIDTH = Content.map.width
-local MAP_HEIGHT = Content.map.height
-local MAX_ZOOM = 2.4
-local ROUTE_TRIM = 14
-
-type RouteStyle = {
-	color: Color3,
-	thickness: number,
-	dash: number?,
-	gap: number?,
-	transparency: number,
-}
-
-local ROUTE_STYLES: { [string]: RouteStyle } = {
-	road = { color = Colors.Road, thickness = 3, dash = nil, gap = nil, transparency = 0.2 },
-	river = { color = Colors.River, thickness = 3, dash = nil, gap = nil, transparency = 0.15 },
-	pass = { color = Colors.Pass, thickness = 3, dash = 10, gap = 6, transparency = 0.1 },
-	sea = { color = Colors.SeaLane, thickness = 2.5, dash = 6, gap = 8, transparency = 0.15 },
-	wild = { color = Colors.Wild, thickness = 2, dash = 6, gap = 6, transparency = 0.25 },
-}
+local MAP_WIDTH = MapData.width
+local MAP_HEIGHT = MapData.height
+local FIELD_OF_VIEW = 40
 
 local options: Options
 local container: Frame
+local viewport: ViewportFrame
+local camera: Camera
 local canvas: Frame
-local canvasScale: UIScale
-local symbols: Frame
+local subBorderLayer: Frame
+local selectionLayer: Frame
+local mineLayer: Frame
 local legend: Frame
+local bordersToggle: TextButton
 local modeButtons: { [string]: TextButton } = {}
-local nodes: { [string]: Node } = {}
 
-local zoom = 0.5
+local houses: { [string]: MapData.House } = {}
+local regions: { [string]: MapData.Region } = {}
+local subs: { Sub } = {}
+local subsByProvince: { [string]: { Sub } } = {}
+local glowByRegion: { [string]: Frame } = {}
+local crests: { ViewportFrame } = {}
+local houseLabels: { HouseLabel } = {}
+local featureLabels: { FeatureLabel } = {}
+local locations: { LocationNode } = {}
+
+local zoom = 0.35
+local styledZoom = -1
 local offset = Vector2.zero
-local mode: MapMode = "realm"
+local mode: MapMode = "houses"
 local selectedId: string? = nil
-local hovering = false
-
--- Geometry helpers ----------------------------------------------------------------------------
-
-local function circle(parent: Instance, x: number, y: number, radius: number, color: Color3, transparency: number?, zIndex: number?): Frame
-	local frame = UI.create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromOffset(x, y),
-		Size = UDim2.fromOffset(radius * 2, radius * 2),
-		BackgroundColor3 = color,
-		BackgroundTransparency = transparency or 0,
-		BorderSizePixel = 0,
-		ZIndex = zIndex or 1,
-		Parent = parent,
-	})
-	UI.create("UICorner", { CornerRadius = UDim.new(1, 0), Parent = frame })
-	return frame
-end
-
-local function segment(parent: Instance, from: Vector2, to: Vector2, style: RouteStyle, zIndex: number)
-	local delta = to - from
-	local length = delta.Magnitude
-	if length <= 0 then
-		return
-	end
-	UI.create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromOffset((from.X + to.X) / 2, (from.Y + to.Y) / 2),
-		Size = UDim2.fromOffset(length, style.thickness),
-		Rotation = math.deg(math.atan2(delta.Y, delta.X)),
-		BackgroundColor3 = style.color,
-		BackgroundTransparency = style.transparency,
-		BorderSizePixel = 0,
-		ZIndex = zIndex,
-		Parent = parent,
-	})
-end
-
-local function route(parent: Instance, a: Vector2, b: Vector2, kind: string)
-	local style = ROUTE_STYLES[kind] or ROUTE_STYLES.road
-	local direction = (b - a).Unit
-	local from = a + direction * ROUTE_TRIM
-	local to = b - direction * ROUTE_TRIM
-	local length = (to - from).Magnitude
-	local dash, gap = style.dash, style.gap
-	if not dash or not gap then
-		segment(parent, from, to, style, 5)
-		return
-	end
-	local travelled = 0
-	while travelled < length do
-		local dashEnd = math.min(length, travelled + dash)
-		segment(parent, from + direction * travelled, from + direction * dashEnd, style, 5)
-		travelled = dashEnd + gap
-	end
-end
-
-local function spaced(text: string): string
-	return (string.gsub(text, "(.)", "%1 ")):sub(1, -2)
-end
-
--- Territory halo radius: a fraction of the distance to the nearest province, so neighbouring
--- territories touch without one swallowing another.
-local function haloRadii(): { [string]: number }
-	local radii = {}
-	for _, idA in Content.provinceIds do
-		local a = Content.provinces[idA].position
-		local nearest = math.huge
-		for _, idB in Content.provinceIds do
-			if idA ~= idB then
-				local b = Content.provinces[idB].position
-				nearest = math.min(nearest, math.sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2))
-			end
-		end
-		radii[idA] = math.clamp(nearest * 0.62, 34, 82)
-	end
-	return radii
-end
-
--- Colouring -----------------------------------------------------------------------------------
-
+local hoveredSub: Sub? = nil
+local hoveredRegionId: string? = nil
+local pointerInside = false
+local overLocation: TextButton? = nil -- location icon under the pointer (its tooltip wins)
+local subBordersVisible = true
+local mineKey = ""
 local maxIncome = 1
 
-local function provinceColor(provinceId: string): Color3
-	local store = options.store
-	local view = store:province(provinceId)
-	if not view then
-		return Colors.Disabled
-	end
-	if mode == "realm" then
-		local house = Content.houses[view.ownerHouseId]
-		return if house then Theme.fromRGB(house.mapColor) else Colors.Disabled
-	elseif mode == "relations" then
-		local myHouseId = store:myHouseId()
-		if not myHouseId then
-			return Colors.Disabled
-		end
-		if view.ownerHouseId == myHouseId then
-			return Colors.Gold
-		end
-		local relation = store:relation(myHouseId, view.ownerHouseId)
-		return Theme.relationColor(if relation then relation.score else 0)
-	elseif mode == "wealth" then
-		local t = math.clamp((view.income or 0) / maxIncome, 0, 1)
-		return Theme.mix(Color3.fromRGB(236, 226, 196), Color3.fromRGB(120, 80, 20), t ^ 0.8)
-	end
-	local terrain = Content.terrains[Content.provinces[provinceId].terrainId]
-	return Theme.fromRGB(terrain.color)
+-- Helpers ----------------------------------------------------------------------------------------
+
+local function fromHex(hex: string): Color3
+	return Color3.fromHex(hex)
 end
 
-local function updateNode(provinceId: string)
-	local node = nodes[provinceId]
-	local view = options.store:province(provinceId)
-	if not node or not view then
-		return
-	end
-	local color = provinceColor(provinceId)
-	node.marker.BackgroundColor3 = color
-	node.halo.BackgroundColor3 = color
-	node.halo.BackgroundTransparency = if mode == "terrain" then 0.35 else 0.5
-	node.badge.Text = tostring(view.development)
-	local mine = view.ownerHouseId == options.store:myHouseId()
-	node.markerStroke.Color = if mine then Colors.GoldBright else Colors.Ink
-	node.markerStroke.Thickness = if mine then 2.5 else 1.5
-	node.ring.Visible = provinceId == selectedId
+local function scalePosition(x: number, y: number): UDim2
+	return UDim2.fromScale(x / MAP_WIDTH, y / MAP_HEIGHT)
 end
+
+local function houseOf(sub: MapData.SubTerritory, region: MapData.Region): MapData.House
+	return houses[sub.houseId or region.houseId] or houses[region.houseId]
+end
+
+local function layer(name: string, zIndex: number): Frame
+	return UI.create("Frame", {
+		Name = name,
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		ZIndex = zIndex,
+		Parent = canvas,
+	})
+end
+
+-- Draws a polygon outline with a Path2D (several when the path exceeds the point limit).
+local function outline(parent: GuiObject, path: Polygon.Path, style: Stroke)
+	local n = #path // 2
+	local points: { Path2DControlPoint } = {}
+	for i = 1, n do
+		points[i] = Path2DControlPoint.new(scalePosition(path[2 * i - 1], path[2 * i]))
+	end
+	local probe = Instance.new("Path2D")
+	local limit = probe:GetMaxControlPoints()
+	local chunks: { { Path2DControlPoint } } = {}
+	local closed = true
+	if limit > 0 and n > limit then
+		closed = false
+		table.insert(points, points[1])
+		local start = 1
+		while start < #points do
+			local stop = math.min(#points, start + limit - 1)
+			local chunk: { Path2DControlPoint } = {}
+			for i = start, stop do
+				table.insert(chunk, points[i])
+			end
+			table.insert(chunks, chunk)
+			start = stop
+		end
+	else
+		chunks = { points }
+	end
+	for index, chunk in chunks do
+		local line = if index == 1 then probe else Instance.new("Path2D")
+		line.Color3 = style.color
+		line.Thickness = style.thickness
+		line.Closed = closed
+		line:SetControlPoints(chunk)
+		line.Parent = parent
+	end
+end
+
+-- Colouring --------------------------------------------------------------------------------------
 
 local function recomputeMaxIncome()
 	maxIncome = 1
@@ -220,7 +182,587 @@ local function recomputeMaxIncome()
 	end
 end
 
--- Legend --------------------------------------------------------------------------------------
+local function modeColor(sub: Sub): Color3
+	if mode == "houses" then
+		return sub.baseColor
+	end
+	local store = options.store
+	local provinceId = sub.data.provinceId
+	local view = store:province(provinceId)
+	if not view then
+		return Colors.Disabled
+	end
+	local color: Color3
+	if mode == "realm" then
+		local owner = Content.houses[view.ownerHouseId]
+		color = if owner then Theme.fromRGB(owner.mapColor) else Colors.Disabled
+	elseif mode == "relations" then
+		local myHouseId = store:myHouseId()
+		if not myHouseId then
+			color = Colors.Disabled
+		elseif view.ownerHouseId == myHouseId then
+			color = Colors.Gold
+		else
+			local relation = store:relation(myHouseId, view.ownerHouseId)
+			color = Theme.relationColor(if relation then relation.score else 0)
+		end
+	elseif mode == "wealth" then
+		local t = math.clamp((view.income or 0) / maxIncome, 0, 1)
+		color = Theme.mix(Color3.fromRGB(236, 226, 196), Color3.fromRGB(120, 80, 20), t ^ 0.8)
+	else
+		local terrain = Content.terrains[Content.provinces[provinceId].terrainId]
+		color = Theme.fromRGB(terrain.color)
+	end
+	-- Keep sub-territories of one province distinguishable.
+	return color:Lerp(Color3.new(0, 0, 0), ((sub.data.shade - 1) % 3) * 0.06)
+end
+
+local function paint(sub: Sub, color: Color3)
+	for _, wedge in sub.wedges do
+		wedge.Color = color
+	end
+end
+
+local function displayColor(sub: Sub): Color3
+	if sub == hoveredSub then
+		return sub.color:Lerp(Color3.new(1, 1, 1), MapStyle.HoverLighten)
+	end
+	return sub.color
+end
+
+local function recolorAll()
+	for _, sub in subs do
+		local color = modeColor(sub)
+		if color ~= sub.color then
+			sub.color = color
+			paint(sub, displayColor(sub))
+		end
+	end
+end
+
+local function recolorProvince(provinceId: string)
+	for _, sub in subsByProvince[provinceId] or {} do
+		local color = modeColor(sub)
+		if color ~= sub.color then
+			sub.color = color
+			paint(sub, displayColor(sub))
+		end
+	end
+end
+
+-- Outlines of the provinces the player's house holds (thin gold) and of the selection (thick).
+local function rebuildMine()
+	local myHouseId = options.store:myHouseId()
+	local owned = {}
+	if myHouseId then
+		for _, provinceId in Content.provinceIds do
+			local view = options.store:province(provinceId)
+			if view and view.ownerHouseId == myHouseId then
+				table.insert(owned, provinceId)
+			end
+		end
+	end
+	local key = table.concat(owned, ",")
+	if key == mineKey then
+		return
+	end
+	mineKey = key
+	mineLayer:ClearAllChildren()
+	local style = { color = Colors.Gold, thickness = 1.5 }
+	for _, provinceId in owned do
+		for _, sub in subsByProvince[provinceId] or {} do
+			for _, path in sub.data.paths do
+				outline(mineLayer, path, style)
+			end
+		end
+	end
+end
+
+local function rebuildSelection()
+	selectionLayer:ClearAllChildren()
+	local provinceId = selectedId
+	if not provinceId then
+		return
+	end
+	for _, sub in subsByProvince[provinceId] or {} do
+		for _, path in sub.data.paths do
+			outline(selectionLayer, path, MapStyle.Selection)
+		end
+	end
+end
+
+-- Hover ------------------------------------------------------------------------------------------
+
+local function subAt(x: number, y: number): Sub?
+	for _, sub in subs do
+		for index, path in sub.data.paths do
+			local b = sub.bounds[index]
+			if x >= b.minX and x <= b.maxX and y >= b.minY and y <= b.maxY and Polygon.contains(path, x, y) then
+				return sub
+			end
+		end
+	end
+	return nil
+end
+
+local function setHover(sub: Sub?)
+	if sub == hoveredSub then
+		return
+	end
+	local previous = hoveredSub
+	hoveredSub = sub
+	if previous then
+		paint(previous, displayColor(previous))
+	end
+	if sub then
+		paint(sub, displayColor(sub))
+	end
+	local regionId = if sub then sub.region.id else nil
+	if regionId ~= hoveredRegionId then
+		if hoveredRegionId and glowByRegion[hoveredRegionId] then
+			glowByRegion[hoveredRegionId].Visible = false
+		end
+		hoveredRegionId = regionId
+		if regionId and glowByRegion[regionId] then
+			glowByRegion[regionId].Visible = true
+		end
+	end
+end
+
+local function provinceLines(provinceId: string): string?
+	local view = options.store:province(provinceId)
+	local definition = Content.provinces[provinceId]
+	if not view or not definition then
+		return nil
+	end
+	local owner = Content.houses[view.ownerHouseId]
+	local terrain = Content.terrains[definition.terrainId]
+	local holding = Content.holdingKinds[definition.holding.kind]
+	return `{Format.escape(definition.name)}: {holding.name} of {Format.escape(definition.holding.name)} · {terrain.name}\nHeld by {owner and owner.name or "?"} · Development {view.development}/{GameConfig.Economy.MaxDevelopment} · Income {Format.gold(view.income)} gold/month`
+end
+
+local function subTooltip(): string?
+	local sub = hoveredSub
+	if not sub then
+		return nil
+	end
+	local header = `<b>{Format.escape(sub.region.name)}</b> · {Format.escape(sub.house.name)}`
+	local details = provinceLines(sub.data.provinceId)
+	return if details then `{header}\n{details}` else header
+end
+
+-- View transform ---------------------------------------------------------------------------------
+
+local function viewSize(): Vector2
+	return container.AbsoluteSize / options.getScale()
+end
+
+local function minZoom(): number
+	local size = viewSize()
+	return math.min(size.X / MAP_WIDTH, size.Y / MAP_HEIGHT) * 0.9
+end
+
+local function clampView()
+	local size = viewSize()
+	zoom = math.clamp(zoom, minZoom(), MapStyle.MaxZoom)
+	local width, height = MAP_WIDTH * zoom, MAP_HEIGHT * zoom
+	local x = math.clamp(offset.X, math.min(size.X * 0.6 - width, size.X * 0.05), math.max(size.X * 0.4, size.X - width))
+	local y = math.clamp(offset.Y, math.min(size.Y * 0.6 - height, size.Y * 0.05), math.max(size.Y * 0.4, size.Y - height))
+	offset = Vector2.new(x, y)
+end
+
+-- Sizes that follow the zoom: crests, labels and which location details are shown.
+local function styleForZoom()
+	if math.abs(zoom - styledZoom) < 1e-4 then
+		return
+	end
+	styledZoom = zoom
+	local crestWidth = MapStyle.clamp(MapStyle.CrestUnits, zoom, MapStyle.CrestMin, MapStyle.CrestMax)
+	local fade = math.clamp((zoom - MapStyle.CrestFadeFrom) / (MapStyle.CrestFadeTo - MapStyle.CrestFadeFrom), 0, 1) * MapStyle.CrestFadeMax
+	for _, crest in crests do
+		crest.Size = UDim2.fromOffset(crestWidth, crestWidth * 1.2)
+		SigilView.setTransparency(crest, fade)
+	end
+	local houseText = math.floor(MapStyle.clamp(MapStyle.HouseTextUnits, zoom, MapStyle.HouseTextMin, MapStyle.HouseTextMax) + 0.5)
+	for _, entry in houseLabels do
+		entry.name.TextSize = houseText
+		entry.house.TextSize = math.floor(houseText * MapStyle.HouseLineRatio + 0.5)
+	end
+	local featureText = math.floor(MapStyle.clamp(MapStyle.FeatureTextUnits, zoom, MapStyle.FeatureTextMin, MapStyle.FeatureTextMax) + 0.5)
+	for _, entry in featureLabels do
+		entry.label.TextSize = featureText
+	end
+	local showIcons = zoom >= MapStyle.LocationIconZoom
+	local showLabels = zoom >= MapStyle.LocationLabelZoom
+	for _, node in locations do
+		node.button.Visible = showIcons
+		node.label.Visible = showLabels
+	end
+end
+
+local function applyView()
+	clampView()
+	canvas.Position = UDim2.fromOffset(offset.X, offset.Y)
+	canvas.Size = UDim2.fromOffset(MAP_WIDTH * zoom, MAP_HEIGHT * zoom)
+	local size = viewSize()
+	local centre = (size / 2 - offset) / zoom
+	camera.CFrame = FlatTriangles.topDownCFrame(centre.X, centre.Y, zoom, size.Y, FIELD_OF_VIEW)
+	styleForZoom()
+end
+
+-- Zooms by `factor`, keeping the map point under `anchor` (container-local virtual px) fixed.
+local function zoomAt(factor: number, anchor: Vector2)
+	local mapPoint = (anchor - offset) / zoom
+	zoom = math.clamp(zoom * factor, minZoom(), MapStyle.MaxZoom)
+	offset = anchor - mapPoint * zoom
+	applyView()
+end
+
+local function toLocal(screenPosition: Vector3 | Vector2): Vector2
+	return (Vector2.new(screenPosition.X, screenPosition.Y) - container.AbsolutePosition) / options.getScale()
+end
+
+local function mapPointAt(screenPosition: Vector3 | Vector2): Vector2
+	return (toLocal(screenPosition) - offset) / zoom
+end
+
+function MapController.fitToView()
+	local size = viewSize()
+	zoom = math.max(minZoom(), size.Y / MAP_HEIGHT * MapStyle.FitMargin)
+	offset = Vector2.new((size.X - MAP_WIDTH * zoom) / 2, (size.Y - MAP_HEIGHT * zoom) / 2)
+	applyView()
+end
+
+function MapController.focusProvince(provinceId: string, targetZoom: number?)
+	local definition = Content.provinces[provinceId]
+	if not definition then
+		return
+	end
+	local size = viewSize()
+	zoom = math.clamp(targetZoom or math.max(zoom, 0.8), minZoom(), MapStyle.MaxZoom)
+	offset = size / 2 - Vector2.new(definition.position.x, definition.position.y) * zoom
+	applyView()
+end
+
+-- Input ------------------------------------------------------------------------------------------
+
+local beginDrag: (input: InputObject, onLocation: boolean?) -> ()
+
+local function bindInput(dragCatcher: TextButton)
+	local dragging = false
+	local dragInput: InputObject? = nil
+	local lastPosition = Vector2.zero
+	local travelled = 0
+	local pinching = false
+	local pinchStartZoom = zoom
+	local pressedLocation = false -- the press started on a location icon, which selects on its own
+
+	beginDrag = function(input: InputObject, onLocation: boolean?)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			if dragging then
+				return
+			end
+			dragging = true
+			dragInput = input
+			lastPosition = Vector2.new(input.Position.X, input.Position.Y)
+			travelled = 0
+			pressedLocation = onLocation == true
+			if input.UserInputType == Enum.UserInputType.Touch then
+				local point = mapPointAt(input.Position)
+				setHover(subAt(point.X, point.Y))
+			end
+		end
+	end
+	dragCatcher.InputBegan:Connect(function(input)
+		beginDrag(input, false)
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and not pinching then
+			local isMouse = input.UserInputType == Enum.UserInputType.MouseMovement and dragInput
+				and dragInput.UserInputType == Enum.UserInputType.MouseButton1
+			if isMouse or input == dragInput then
+				local position = Vector2.new(input.Position.X, input.Position.Y)
+				local delta = (position - lastPosition) / options.getScale()
+				lastPosition = position
+				travelled += delta.Magnitude
+				offset += delta
+				applyView()
+			end
+		elseif input.UserInputType == Enum.UserInputType.MouseMovement and pointerInside then
+			local point = mapPointAt(input.Position)
+			setHover(subAt(point.X, point.Y))
+			if not overLocation then
+				Tooltip.refresh(dragCatcher)
+			end
+		end
+		if input.UserInputType == Enum.UserInputType.MouseWheel and pointerInside then
+			local factor = if input.Position.Z > 0 then 1.15 else 1 / 1.15
+			zoomAt(factor, toLocal(input.Position))
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if not dragging then
+			return
+		end
+		if input == dragInput or (input.UserInputType == Enum.UserInputType.MouseButton1 and dragInput
+			and dragInput.UserInputType == Enum.UserInputType.MouseButton1) then
+			dragging = false
+			dragInput = nil
+			if travelled < 4 and not pinching and not pressedLocation then
+				-- A click selects the province under the pointer; the sea clears the selection.
+				local point = mapPointAt(input.Position)
+				local sub = subAt(point.X, point.Y)
+				options.onSelect(if sub then sub.data.provinceId else nil)
+			end
+			if input.UserInputType == Enum.UserInputType.Touch then
+				setHover(nil) -- touch has no hover: the highlight lasts only while the finger is down
+			end
+		end
+	end)
+
+	UserInputService.TouchPinch:Connect(function(positions, pinchScale, _velocity, state)
+		if not pointerInside and state == Enum.UserInputState.Begin then
+			return
+		end
+		if state == Enum.UserInputState.Begin then
+			pinching = true
+			pinchStartZoom = zoom
+		elseif state == Enum.UserInputState.Change and pinching then
+			local anchor = if #positions >= 2 then toLocal((positions[1] + positions[2]) / 2) else viewSize() / 2
+			zoomAt((pinchStartZoom * pinchScale) / zoom, anchor)
+		elseif state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then
+			pinching = false
+			dragging = false
+			dragInput = nil
+		end
+	end)
+
+	container.MouseEnter:Connect(function()
+		pointerInside = true
+	end)
+	container.MouseLeave:Connect(function()
+		pointerInside = false
+		setHover(nil)
+		Tooltip.refresh(dragCatcher)
+	end)
+	container.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.Touch then
+			pointerInside = true
+		end
+	end)
+
+	Tooltip.bind(dragCatcher, subTooltip)
+end
+
+-- Construction -----------------------------------------------------------------------------------
+
+local function buildFills()
+	camera = Instance.new("Camera")
+	camera.FieldOfView = FIELD_OF_VIEW
+	camera.Parent = viewport
+	viewport.CurrentCamera = camera
+
+	local land = Instance.new("Model")
+	land.Name = "Land"
+	for _, sub in subs do
+		for _, path in sub.data.paths do
+			FlatTriangles.addList(sub.wedges, Polygon.triangulate(path), 0, sub.color)
+		end
+		FlatTriangles.parentAll(sub.wedges, land)
+	end
+	for _, feature in MapData.specialFeatures do
+		local wedges: { WedgePart } = {}
+		for _, path in feature.paths do
+			FlatTriangles.addList(wedges, Polygon.triangulate(path), 0, fromHex(feature.color))
+		end
+		FlatTriangles.parentAll(wedges, land)
+	end
+	land.Parent = viewport
+end
+
+local function buildBorders()
+	subBorderLayer = layer("SubBorders", 1)
+	for _, sub in subs do
+		for _, path in sub.data.paths do
+			outline(subBorderLayer, path, MapStyle.SubBorder)
+		end
+	end
+	local features = layer("FeatureBorders", 2)
+	for _, feature in MapData.specialFeatures do
+		for _, path in feature.paths do
+			outline(features, path, MapStyle.FeatureBorder)
+		end
+	end
+	local regionLayer = layer("RegionBorders", 3)
+	for _, region in MapData.regions do
+		for _, path in region.paths do
+			outline(regionLayer, path, MapStyle.RegionBorder)
+		end
+	end
+	local glowLayer = layer("RegionGlow", 4)
+	for _, region in MapData.regions do
+		local glow = UI.create("Frame", {
+			Name = `Glow_{region.id}`,
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			Visible = false,
+			Parent = glowLayer,
+		})
+		for _, path in region.paths do
+			outline(glow, path, MapStyle.RegionGlow)
+		end
+		for _, path in region.paths do
+			outline(glow, path, MapStyle.RegionGlowCore)
+		end
+		glowByRegion[region.id] = glow
+	end
+	mineLayer = layer("OwnProvinces", 5)
+	selectionLayer = layer("Selection", 6)
+end
+
+local function textLabel(props: { [string]: any }, halo: Color3): TextLabel
+	local label = UI.create("TextLabel", {
+		BackgroundTransparency = 1,
+		AutomaticSize = Enum.AutomaticSize.XY,
+		Size = UDim2.fromOffset(0, 0),
+		FontFace = props.FontFace or Fonts.Heading,
+		TextColor3 = props.TextColor3,
+		TextSize = props.TextSize or 14,
+		Text = props.Text,
+		Name = props.Name,
+		LayoutOrder = props.LayoutOrder or 0,
+		Parent = props.Parent,
+	})
+	UI.create("UIStroke", {
+		Color = halo,
+		Thickness = props.HaloThickness or 1.5,
+		Transparency = 0.1,
+		LineJoinMode = Enum.LineJoinMode.Round,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
+		Parent = label,
+	})
+	return label
+end
+
+local function buildCrestsAndLabels()
+	local crestLayer = layer("Crests", 7)
+	for _, house in MapData.houses do
+		local crest = house.crest
+		if crest and not house.minor then
+			local view = SigilView.new(house.id, {
+				anchorPoint = Vector2.new(0.5, 0.5),
+				position = scalePosition(crest.x, crest.y),
+				fallbackColor = fromHex(house.primaryColor),
+				name = `Crest_{house.id}`,
+				parent = crestLayer,
+			})
+			table.insert(crests, view)
+		end
+	end
+
+	local labelLayer = layer("Labels", 9)
+	for _, feature in MapData.specialFeatures do
+		local spot = feature.label
+		if spot then
+			local fill = fromHex(feature.color)
+			local textColor, halo = MapStyle.contrast(fill)
+			local label = textLabel({ Name = `Feature_{feature.id}`, Text = string.upper(feature.name), TextColor3 = textColor, Parent = labelLayer }, halo)
+			label.AnchorPoint = Vector2.new(0.5, 0.5)
+			label.Position = scalePosition(spot.x, spot.y)
+			table.insert(featureLabels, { label = label })
+		end
+	end
+	for _, house in MapData.houses do
+		local spot = house.label
+		if spot and not house.minor then
+			local textColor, halo = MapStyle.contrast(fromHex(house.primaryColor))
+			local holder = UI.create("Frame", {
+				Name = `HouseLabel_{house.id}`,
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = scalePosition(spot.x, spot.y),
+				AutomaticSize = Enum.AutomaticSize.XY,
+				Size = UDim2.fromOffset(0, 0),
+				BackgroundTransparency = 1,
+				Parent = labelLayer,
+			})
+			UI.create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Vertical,
+				HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, -2),
+				Parent = holder,
+			})
+			local name = string.upper((string.gsub(house.name, "^House%s+", "")))
+			local houseLine = textLabel({ Text = "HOUSE", TextColor3 = textColor, LayoutOrder = 1, Parent = holder }, halo)
+			local nameLine = textLabel({ Text = name, TextColor3 = textColor, LayoutOrder = 2, Parent = holder }, halo)
+			table.insert(houseLabels, { holder = holder, house = houseLine, name = nameLine })
+		end
+	end
+end
+
+local function locationTooltip(location: MapData.Location): string
+	local provinceId = location.provinceId
+	local details = if provinceId then provinceLines(provinceId) else nil
+	local title = `<b>{Format.escape(location.name)}</b>`
+	return if details then `{title}\n{details}` else title
+end
+
+local function buildLocations()
+	local locationLayer = layer("Locations", 8)
+	for _, location in MapData.locations do
+		local provinceId = location.provinceId
+		local button = UI.create("TextButton", {
+			Name = if provinceId then `Province_{provinceId}` else `Location_{location.id}`,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = scalePosition(location.x, location.y),
+			Size = UDim2.fromOffset(MapStyle.IconSize, MapStyle.IconSize),
+			BackgroundTransparency = 1,
+			Text = "",
+			AutoButtonColor = false,
+			ZIndex = 1,
+			Parent = locationLayer,
+		})
+		local icon = UI.create("Frame", { Name = "Icon", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = 1, Parent = button })
+		MapIcons.build(icon, location.type, MapStyle.Ink, MapStyle.Paper)
+		local label = textLabel({
+			Name = "Label",
+			Text = location.name,
+			TextSize = MapStyle.LocationTextSize,
+			FontFace = Fonts.Serif,
+			TextColor3 = MapStyle.Ink,
+			HaloThickness = 1.2,
+			Parent = button,
+		}, MapStyle.Paper)
+		label.AnchorPoint = Vector2.new(0.5, 0)
+		label.Position = UDim2.new(0.5, 0, 1, 1)
+		label.ZIndex = 4
+
+		button.InputBegan:Connect(function(input)
+			beginDrag(input, true)
+		end)
+		button.MouseEnter:Connect(function()
+			overLocation = button
+		end)
+		button.MouseLeave:Connect(function()
+			if overLocation == button then
+				overLocation = nil
+			end
+		end)
+		button.Activated:Connect(function()
+			if provinceId then
+				options.onSelect(provinceId)
+			end
+		end)
+		Tooltip.bind(button, function()
+			return locationTooltip(location)
+		end)
+		table.insert(locations, { button = button, label = label })
+	end
+end
+
+-- Overlay ----------------------------------------------------------------------------------------
 
 local function legendRow(text: string, color: Color3, order: number)
 	local row = UI.create("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 16), LayoutOrder = order, Parent = legend })
@@ -244,15 +786,17 @@ local function rebuildLegend()
 			child:Destroy()
 		end
 	end
-	if mode == "realm" then
-		UI.label({ text = "Colour shows the owning house. Gold outlines mark your provinces.", size = Theme.TextSize.Small, wrap = true, color = Colors.Ink, order = 1, parent = legend })
+	if mode == "houses" then
+		UI.label({ text = "The lands of the great houses. Shades mark the sub-territories of each region.", size = Theme.TextSize.Small, wrap = true, color = Colors.Ink, order = 1, parent = legend })
+	elseif mode == "realm" then
+		UI.label({ text = "Colour shows the house that holds each province today.", size = Theme.TextSize.Small, wrap = true, color = Colors.Ink, order = 1, parent = legend })
 	elseif mode == "relations" then
 		legendRow("Your house", Colors.Gold, 1)
 		legendRow("Friendly (+100)", Theme.relationColor(100), 2)
 		legendRow("Neutral (0)", Theme.relationColor(0), 3)
 		legendRow("Hostile (-100)", Theme.relationColor(-100), 4)
 	elseif mode == "wealth" then
-		legendRow(`Poor`, Color3.fromRGB(236, 226, 196), 1)
+		legendRow("Poor", Color3.fromRGB(236, 226, 196), 1)
 		legendRow(`Rich ({Format.gold(maxIncome)} gold/month)`, Color3.fromRGB(120, 80, 20), 2)
 	else
 		local order = 0
@@ -261,320 +805,14 @@ local function rebuildLegend()
 			legendRow(terrain.name, Theme.fromRGB(terrain.color), order)
 		end
 	end
-	UI.label({ text = "Routes: road, river, ~ sea lane, - - mountain pass", size = Theme.TextSize.Small, wrap = true, color = Colors.InkMuted, order = 99, parent = legend })
+	UI.label({ text = "Gold outlines: your provinces (thin), the selection (thick).", size = Theme.TextSize.Small, wrap = true, color = Colors.InkMuted, order = 99, parent = legend })
 end
 
--- View transform ------------------------------------------------------------------------------
-
-local function viewSize(): Vector2
-	local scale = options.getScale()
-	return container.AbsoluteSize / scale
-end
-
-local function minZoom(): number
-	local size = viewSize()
-	return math.min(size.X / MAP_WIDTH, size.Y / MAP_HEIGHT) * 0.9
-end
-
-local function clampView()
-	local size = viewSize()
-	zoom = math.clamp(zoom, minZoom(), MAX_ZOOM)
-	local width, height = MAP_WIDTH * zoom, MAP_HEIGHT * zoom
-	local x = math.clamp(offset.X, math.min(size.X * 0.6 - width, size.X * 0.05), math.max(size.X * 0.4, size.X - width))
-	local y = math.clamp(offset.Y, math.min(size.Y * 0.6 - height, size.Y * 0.05), math.max(size.Y * 0.4, size.Y - height))
-	offset = Vector2.new(x, y)
-end
-
-local function applyView()
-	clampView()
-	canvasScale.Scale = zoom
-	canvas.Position = UDim2.fromOffset(offset.X, offset.Y)
-	for provinceId, node in nodes do
-		local position = Content.provinces[provinceId].position
-		node.button.Position = UDim2.fromOffset(offset.X + position.x * zoom, offset.Y + position.y * zoom)
-	end
-end
-
--- Zooms by `factor`, keeping the map point under `anchor` (container-local virtual px) fixed.
-local function zoomAt(factor: number, anchor: Vector2)
-	local mapPoint = (anchor - offset) / zoom
-	zoom = math.clamp(zoom * factor, minZoom(), MAX_ZOOM)
-	offset = anchor - mapPoint * zoom
-	applyView()
-end
-
-local function toLocal(screenPosition: Vector3 | Vector2): Vector2
-	local scale = options.getScale()
-	return (Vector2.new(screenPosition.X, screenPosition.Y) - container.AbsolutePosition) / scale
-end
-
-function MapController.fitToView()
-	local size = viewSize()
-	zoom = math.max(minZoom(), size.Y / MAP_HEIGHT * 0.98)
-	offset = Vector2.new((size.X - MAP_WIDTH * zoom) / 2, (size.Y - MAP_HEIGHT * zoom) / 2)
-	applyView()
-end
-
-function MapController.focusProvince(provinceId: string, targetZoom: number?)
-	local definition = Content.provinces[provinceId]
-	if not definition then
-		return
-	end
-	local size = viewSize()
-	zoom = math.clamp(targetZoom or math.max(zoom, 0.8), minZoom(), MAX_ZOOM)
-	offset = size / 2 - Vector2.new(definition.position.x, definition.position.y) * zoom
-	applyView()
-end
-
--- Input ----------------------------------------------------------------------------------------
-
-local function bindInput(dragCatcher: TextButton)
-	local dragging = false
-	local dragInput: InputObject? = nil
-	local lastPosition = Vector2.zero
-	local travelled = 0
-	local pinching = false
-	local pinchStartZoom = zoom
-
-	dragCatcher.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			if dragging then
-				return
-			end
-			dragging = true
-			dragInput = input
-			lastPosition = Vector2.new(input.Position.X, input.Position.Y)
-			travelled = 0
-		end
-	end)
-
-	UserInputService.InputChanged:Connect(function(input)
-		if dragging and not pinching then
-			local isMouse = input.UserInputType == Enum.UserInputType.MouseMovement and dragInput
-				and dragInput.UserInputType == Enum.UserInputType.MouseButton1
-			if isMouse or input == dragInput then
-				local position = Vector2.new(input.Position.X, input.Position.Y)
-				local delta = (position - lastPosition) / options.getScale()
-				lastPosition = position
-				travelled += delta.Magnitude
-				offset += delta
-				applyView()
-			end
-		end
-		if input.UserInputType == Enum.UserInputType.MouseWheel and hovering then
-			local factor = if input.Position.Z > 0 then 1.15 else 1 / 1.15
-			zoomAt(factor, toLocal(input.Position))
-		end
-	end)
-
-	UserInputService.InputEnded:Connect(function(input)
-		if not dragging then
-			return
-		end
-		if input == dragInput or (input.UserInputType == Enum.UserInputType.MouseButton1 and dragInput
-			and dragInput.UserInputType == Enum.UserInputType.MouseButton1) then
-			dragging = false
-			dragInput = nil
-			if travelled < 4 and not pinching then
-				-- A click on empty map clears the selection.
-				options.onSelect(nil)
-			end
-		end
-	end)
-
-	UserInputService.TouchPinch:Connect(function(positions, scale, _velocity, state)
-		if not hovering and state == Enum.UserInputState.Begin then
-			return
-		end
-		if state == Enum.UserInputState.Begin then
-			pinching = true
-			pinchStartZoom = zoom
-		elseif state == Enum.UserInputState.Change and pinching then
-			local anchor = if #positions >= 2 then toLocal((positions[1] + positions[2]) / 2) else viewSize() / 2
-			zoomAt((pinchStartZoom * scale) / zoom, anchor)
-		elseif state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then
-			pinching = false
-			dragging = false
-			dragInput = nil
-		end
-	end)
-
-	container.MouseEnter:Connect(function()
-		hovering = true
-	end)
-	container.MouseLeave:Connect(function()
-		hovering = false
-	end)
-	container.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.Touch then
-			hovering = true
-		end
-	end)
-end
-
--- Construction ---------------------------------------------------------------------------------
-
-local function buildGeometry()
-	-- Coastline: slightly larger darker circles under the land produce an outline of the union.
-	for _, blob in Content.map.landmass do
-		circle(canvas, blob.x, blob.y, blob.r + 6, Colors.Coast, 0, 1)
-	end
-	for _, blob in Content.map.landmass do
-		circle(canvas, blob.x, blob.y, blob.r, Colors.Land, 0, 2)
-	end
-	for _, label in Content.map.labels do
-		local isSea = string.find(label.text, "SEA", 1, true) ~= nil
-		UI.create("TextLabel", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromOffset(label.x, label.y),
-			Size = UDim2.fromOffset(320, 30),
-			BackgroundTransparency = 1,
-			Text = spaced(label.text),
-			TextSize = if isSea then 15 else 19,
-			FontFace = if isSea then Fonts.SerifItalic else Fonts.Heading,
-			TextColor3 = if isSea then Colors.SeaLane else Colors.MapLabel,
-			TextTransparency = if isSea then 0.2 else 0.45,
-			ZIndex = 6,
-			Parent = canvas,
-		})
-	end
-	for _, idA in Content.provinceIds do
-		local a = Content.provinces[idA]
-		for idB, kind in a.adjacent do
-			if idA < idB then
-				local b = Content.provinces[idB]
-				route(canvas, Vector2.new(a.position.x, a.position.y), Vector2.new(b.position.x, b.position.y), kind)
-			end
-		end
-	end
-end
-
-local function provinceTooltip(provinceId: string): string?
-	local view = options.store:province(provinceId)
-	local definition = Content.provinces[provinceId]
-	if not view then
-		return nil
-	end
-	local owner = Content.houses[view.ownerHouseId]
-	local terrain = Content.terrains[definition.terrainId]
-	local holding = Content.holdingKinds[definition.holding.kind]
-	return `<b>{Format.escape(definition.name)}</b>\n{holding.name} of {Format.escape(definition.holding.name)} · {terrain.name}\nOwner: {owner and owner.name or "?"}\nDevelopment {view.development}/{GameConfig.Economy.MaxDevelopment} · Income {Format.gold(view.income)} gold/month`
-end
-
-local function buildNodes()
-	local radii = haloRadii()
-	for _, provinceId in Content.provinceIds do
-		local definition = Content.provinces[provinceId]
-		local holding = Content.holdingKinds[definition.holding.kind]
-
-		local halo = circle(canvas, definition.position.x, definition.position.y, radii[provinceId], Colors.Disabled, 0.5, 3)
-		halo.Name = `Halo_{provinceId}`
-
-		local button = UI.create("TextButton", {
-			Name = `Province_{provinceId}`,
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Size = UDim2.fromOffset(34, 34),
-			BackgroundTransparency = 1,
-			Text = "",
-			AutoButtonColor = false,
-			ZIndex = 10,
-			Parent = symbols,
-		})
-		local hoverScale = UI.create("UIScale", { Scale = 1, Parent = button })
-
-		local ring = UI.create("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromOffset(42, 42),
-			BackgroundTransparency = 1,
-			Visible = false,
-			ZIndex = 10,
-			Parent = button,
-		})
-		UI.create("UICorner", { CornerRadius = UDim.new(1, 0), Parent = ring })
-		UI.stroke(ring, Colors.Selection, 3)
-
-		local markerSize = if holding.marker == "diamond" then 17 else 22
-		local marker = UI.create("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromOffset(markerSize, markerSize),
-			Rotation = if holding.marker == "diamond" then 45 else 0,
-			BorderSizePixel = 0,
-			ZIndex = 11,
-			Parent = button,
-		})
-		if holding.marker == "circle" or holding.marker == "ring" then
-			UI.create("UICorner", { CornerRadius = UDim.new(1, 0), Parent = marker })
-		else
-			UI.corner(marker, 3)
-		end
-		if holding.marker == "ring" then
-			local hole = UI.create("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.fromScale(0.42, 0.42),
-				BackgroundColor3 = Colors.Land,
-				BorderSizePixel = 0,
-				ZIndex = 12,
-				Parent = marker,
-			})
-			UI.create("UICorner", { CornerRadius = UDim.new(1, 0), Parent = hole })
-		end
-		local markerStroke = UI.stroke(marker, Colors.Ink, 1.5)
-
-		local badge = UI.create("TextLabel", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.new(1, 0, 0, 2),
-			Size = UDim2.fromOffset(15, 15),
-			BackgroundColor3 = Colors.Chrome,
-			Text = "",
-			TextColor3 = Colors.GoldBright,
-			TextSize = 11,
-			FontFace = Fonts.BodyBold,
-			ZIndex = 13,
-			Parent = button,
-		})
-		UI.create("UICorner", { CornerRadius = UDim.new(1, 0), Parent = badge })
-
-		UI.create("TextLabel", {
-			AnchorPoint = Vector2.new(0.5, 0),
-			Position = UDim2.new(0.5, 0, 1, -2),
-			Size = UDim2.fromOffset(150, 16),
-			BackgroundTransparency = 1,
-			Text = definition.name,
-			TextColor3 = Colors.Ink,
-			TextStrokeColor3 = Colors.Land,
-			TextStrokeTransparency = 0.2,
-			TextSize = 13,
-			FontFace = Fonts.Heading,
-			ZIndex = 12,
-			Parent = button,
-		})
-
-		button.Activated:Connect(function()
-			options.onSelect(provinceId)
-		end)
-		button.MouseEnter:Connect(function()
-			hoverScale.Scale = 1.15
-		end)
-		button.MouseLeave:Connect(function()
-			hoverScale.Scale = 1
-		end)
-		Tooltip.bind(button, function()
-			return provinceTooltip(provinceId)
-		end)
-
-		nodes[provinceId] = {
-			button = button,
-			marker = marker,
-			markerStroke = markerStroke,
-			badge = badge,
-			ring = ring,
-			halo = halo,
-			hoverScale = hoverScale,
-		}
-	end
+local function setSubBordersVisible(visible: boolean)
+	subBordersVisible = visible
+	subBorderLayer.Visible = visible
+	bordersToggle.Text = if visible then "Sub-territory borders: on" else "Sub-territory borders: off"
+	UI.setSelected(bordersToggle, visible)
 end
 
 local function buildOverlay()
@@ -582,7 +820,7 @@ local function buildOverlay()
 		Name = "MapModes",
 		AnchorPoint = Vector2.new(0, 1),
 		Position = UDim2.new(0, 10, 1, -10),
-		Size = UDim2.fromOffset(196, 0),
+		Size = UDim2.fromOffset(204, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
 		BackgroundColor3 = Colors.Parchment,
 		BackgroundTransparency = 0.05,
@@ -596,7 +834,7 @@ local function buildOverlay()
 	UI.list(modes, "vertical", 6)
 	UI.sectionHeader("Map mode", 1, modes)
 
-	local grid = UI.create("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 62), LayoutOrder = 2, Parent = modes })
+	local grid = UI.create("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 96), LayoutOrder = 2, Parent = modes })
 	UI.create("UIGridLayout", {
 		CellSize = UDim2.new(0.5, -3, 0, 28),
 		CellPadding = UDim2.fromOffset(6, 6),
@@ -604,7 +842,8 @@ local function buildOverlay()
 		Parent = grid,
 	})
 	local modeInfo: { { id: MapMode, label: string, tip: string } } = {
-		{ id = "realm", label = "Realm", tip = "Who owns each province." },
+		{ id = "houses", label = "Houses", tip = "The lands of the nine great houses." },
+		{ id = "realm", label = "Realm", tip = "Who holds each province today." },
 		{ id = "relations", label = "Relations", tip = "How each owner regards your house." },
 		{ id = "wealth", label = "Wealth", tip = "Monthly income of each province." },
 		{ id = "terrain", label = "Terrain", tip = "Terrain affects income and development cost." },
@@ -624,7 +863,20 @@ local function buildOverlay()
 		modeButtons[info.id] = button
 	end
 
-	legend = UI.create("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = 3, Parent = modes })
+	bordersToggle = UI.button({
+		text = "Sub-territory borders: on",
+		variant = "ghost",
+		textSize = Theme.TextSize.Small,
+		size = UDim2.new(1, 0, 0, 26),
+		order = 3,
+		parent = modes,
+		onActivated = function()
+			setSubBordersVisible(not subBordersVisible)
+		end,
+	})
+	Tooltip.setText(bordersToggle, "Show or hide the thin borders between sub-territories.")
+
+	legend = UI.create("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = 4, Parent = modes })
 	UI.list(legend, "vertical", 3)
 
 	local zoomBox = UI.create("Frame", {
@@ -653,21 +905,55 @@ local function buildOverlay()
 	end)
 end
 
+local function indexData()
+	for _, house in MapData.houses do
+		houses[house.id] = house
+	end
+	for _, region in MapData.regions do
+		regions[region.id] = region
+	end
+	for _, data in MapData.subTerritories do
+		local region = regions[data.regionId]
+		local house = houseOf(data, region)
+		local shades = house.shadeColors
+		local baseColor = fromHex(shades[math.clamp(data.shade, 1, #shades)])
+		local bounds = {}
+		for index, path in data.paths do
+			bounds[index] = Polygon.bounds(path)
+		end
+		local sub: Sub = { data = data, region = region, house = house, baseColor = baseColor, color = baseColor, wedges = {}, bounds = bounds }
+		table.insert(subs, sub)
+		local list = subsByProvince[data.provinceId]
+		if not list then
+			list = {}
+			subsByProvince[data.provinceId] = list
+		end
+		table.insert(list, sub)
+	end
+end
+
 function MapController.mount(parent: Frame, mapOptions: Options)
 	options = mapOptions
+	indexData()
+	local ocean = fromHex(MapData.oceanColor)
 	container = UI.create("Frame", {
 		Name = "Map",
 		Size = UDim2.fromScale(1, 1),
-		BackgroundColor3 = Colors.Sea,
+		BackgroundColor3 = ocean,
 		BorderSizePixel = 0,
 		ClipsDescendants = true,
 		Parent = parent,
 	})
-	UI.create("UIGradient", {
-		Color = ColorSequence.new(Colors.Sea, Colors.SeaDeep),
-		Rotation = 90,
+	viewport = UI.create("ViewportFrame", {
+		Name = "Fills",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = ocean,
+		BackgroundTransparency = 0,
+		BorderSizePixel = 0,
+		ZIndex = 1,
 		Parent = container,
 	})
+	FlatTriangles.setupViewport(viewport)
 
 	local dragCatcher = UI.create("TextButton", {
 		Name = "DragCatcher",
@@ -675,34 +961,27 @@ function MapController.mount(parent: Frame, mapOptions: Options)
 		BackgroundTransparency = 1,
 		Text = "",
 		AutoButtonColor = false,
-		ZIndex = 1,
+		ZIndex = 2,
 		Parent = container,
 	})
 
 	canvas = UI.create("Frame", {
 		Name = "Canvas",
-		Size = UDim2.fromOffset(MAP_WIDTH, MAP_HEIGHT),
-		BackgroundTransparency = 1,
-		ZIndex = 2,
-		Parent = container,
-	})
-	canvasScale = UI.create("UIScale", { Scale = zoom, Parent = canvas })
-
-	symbols = UI.create("Frame", {
-		Name = "Symbols",
-		Size = UDim2.fromScale(1, 1),
+		Size = UDim2.fromOffset(MAP_WIDTH * zoom, MAP_HEIGHT * zoom),
 		BackgroundTransparency = 1,
 		ZIndex = 3,
 		Parent = container,
 	})
 
-	buildGeometry()
-	buildNodes()
-	buildOverlay()
+	buildFills()
+	buildBorders()
 	bindInput(dragCatcher)
+	buildCrestsAndLabels()
+	buildLocations()
+	buildOverlay()
 
 	container:GetPropertyChangedSignal("AbsoluteSize"):Connect(applyView)
-	MapController.setMode("realm")
+	MapController.setMode("houses")
 	MapController.fitToView()
 end
 
@@ -713,23 +992,16 @@ function MapController.setMode(newMode: MapMode)
 	end
 	recomputeMaxIncome()
 	rebuildLegend()
-	for provinceId in nodes do
-		updateNode(provinceId)
-	end
+	recolorAll()
+	rebuildMine()
 end
 
 function MapController.select(provinceId: string?)
-	local previous = selectedId
 	selectedId = provinceId
-	if previous then
-		updateNode(previous)
-	end
-	if provinceId then
-		updateNode(provinceId)
-	end
+	rebuildSelection()
 end
 
--- Applies replicated changes: only affected nodes are recoloured unless the mode depends on
+-- Applies replicated changes: only affected provinces are recoloured unless the mode depends on
 -- data that changed globally (relations, the player's house, full resync).
 function MapController.refresh(changes: ReplicaStore.ChangeSet)
 	local all = changes.full or changes.session
@@ -742,13 +1014,14 @@ function MapController.refresh(changes: ReplicaStore.ChangeSet)
 		all = true
 	end
 	if all then
-		for provinceId in nodes do
-			updateNode(provinceId)
+		recolorAll()
+	else
+		for provinceId in changes.provinces do
+			recolorProvince(provinceId)
 		end
-		return
 	end
-	for provinceId in changes.provinces do
-		updateNode(provinceId)
+	if all or next(changes.provinces) ~= nil then
+		rebuildMine()
 	end
 end
 

@@ -14,7 +14,7 @@ still to be run by a human.**
 | Campaign state with stable ids, versioned schema | Done | `CampaignState`, `GameTypes`, `StateInvariants` | Scenario A |
 | Data-driven content: 10 houses, 34 provinces, 52 characters, traits, cultures, faiths, bookmark | Done | `Shared/Data` | Scenario A, content validator |
 | Startup validation with clear diagnostics | Done | `ContentValidator` | Scenario A (negative cases) |
-| Strategic map: provinces, routes, territories, selection, 4 map modes, pan/zoom (mouse and touch) | Done | `MapController` | UI smoke test; Studio §3 |
+| World map: political map of the nine great houses traced from a reference, sub-territories, crests, locations, hover, selection, 5 map modes, pan/zoom (mouse and touch) | Done | `MapData`, `MapController`, `SigilView` | Scenario K, UI smoke test; Studio §3 |
 | House selection with real starting state | Done | `LobbyScreen`, `SessionRegistry` | Scenario B, UI smoke test |
 | Top bar: house, ruler, treasury with budget tooltip, holdings, date | Done | `TopBar` | UI smoke test |
 | Campaign clock: pause, three speeds, monthly hooks, host policy | Done | `GameClock`, `Simulation`, `CampaignHost` | Scenario D |
@@ -41,7 +41,9 @@ Known limitations of Phase 1 (by design, deferred to later phases):
   Persistent shared campaigns and session locking are Phase 7.
 * All campaign state is visible to all players (hidden information arrives with intrigue in
   Phase 4).
-* The map is a stylised silhouette made of circles. Real map art is Phase 8.
+* The map shows the nine great houses only; minor-house fiefs, rivers and roads are not drawn
+  (adjacency still exists in the content). MapData supports minor houses through sub-territory
+  `houseId` overrides.
 
 ## Phase 2 — Characters, courts and relationships
 

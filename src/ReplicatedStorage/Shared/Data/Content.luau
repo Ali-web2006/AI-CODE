@@ -14,7 +14,7 @@ local TerrainDefinitions = require(script.Parent.World.TerrainDefinitions)
 local HoldingKindDefinitions = require(script.Parent.World.HoldingKindDefinitions)
 local RegionDefinitions = require(script.Parent.World.RegionDefinitions)
 local ProvinceDefinitions = require(script.Parent.World.ProvinceDefinitions)
-local MapDefinition = require(script.Parent.World.MapDefinition)
+local MapData = require(script.Parent.World.MapData)
 local HouseDefinitions = require(script.Parent.Houses.HouseDefinitions)
 local TraitDefinitions = require(script.Parent.Characters.TraitDefinitions)
 local CultureDefinitions = require(script.Parent.Characters.CultureDefinitions)
@@ -66,7 +66,8 @@ Content.bookmarks = indexById(Content.raw.bookmarks) :: { [string]: GameTypes.Bo
 Content.provinceIds = sortedIds(ProvinceDefinitions)
 Content.houseIds = sortedIds(HouseDefinitions)
 
-Content.map = MapDefinition :: GameTypes.MapDefinition
+-- The world map canvas. Its drawing (outlines, colours, crests) is in MapData and only the client uses it.
+Content.map = { width = MapData.width, height = MapData.height } :: GameTypes.MapDefinition
 
 function Content.getBookmark(bookmarkId: string): GameTypes.BookmarkDefinition?
 	return Content.bookmarks[bookmarkId]

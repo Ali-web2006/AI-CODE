@@ -1,15 +1,15 @@
--- Dumps map geometry and starting ownership as JSON (used to render a preview image of the map).
+-- Dumps the world map configuration (MapData) and the sigil art as JSON, for the preview renderer.
 -- Usage: lune run tests/map_dump.luau > build/map.json
 local process = require("@lune/process")
 local serde = require("@lune/serde")
 local VirtualRoblox = require("./harness/VirtualRoblox")
 local vr = VirtualRoblox.new(process.cwd)
 local Content = vr.require("ReplicatedStorage.Shared.Data.Content")
-local bookmark = Content.getBookmark("long_summer_297")
+local MapData = vr.require("ReplicatedStorage.Shared.Data.World.MapData")
+local SigilArt = vr.require("ReplicatedStorage.Shared.Data.World.SigilArt")
 local provinces = {}
 for _, id in Content.provinceIds do
 	local p = Content.provinces[id]
-	local owner = Content.houses[bookmark.provinces[id].ownerHouseId]
-	table.insert(provinces, { id = id, name = p.name, x = p.position.x, y = p.position.y, adjacent = p.adjacent, color = owner.mapColor, marker = Content.holdingKinds[p.holding.kind].marker })
+	provinces[id] = { name = p.name, x = p.position.x, y = p.position.y }
 end
-print(serde.encode("json", { map = Content.map, provinces = provinces }))
+print(serde.encode("json", { map = MapData, sigils = SigilArt, provinces = provinces }))
