@@ -32,6 +32,7 @@ npm --prefix tools/typecheck install
 | Type check | `lune run tools/typecheck/record_requires.luau build/IronThrone.rbxl build/requires.json` then `node tools/typecheck/typecheck.mjs build/requires.json build/globalTypes.d.luau` | Every script type-checks in `--!strict` with the official Luau analyzer (new solver) against luau-lsp's Roblox definitions. Instance-path requires are resolved from recorded call sites, so cross-module types are checked |
 | Balance report | `lune run tests/balance_report.luau 30` | Diagnostic only: 30-year all-AI economy table |
 | House report | `lune run tests/house_report.luau` | Diagnostic only: starting position of every house |
+| Map preview | `lune run tests/map_dump.luau > build/map.json` then `python3 tools/render_map_preview.py build/map.json build/map_preview.png` | Diagnostic only: renders the map (landmass, territories, routes, markers, labels) from content data, so layout edits can be reviewed without Studio |
 
 Type-check caveat: Studio's Script Analysis uses its own knowledge of the DataModel. The offline
 check emulates the parts that matter (service and `Instance.new` result types, `Enum` type names,

@@ -84,6 +84,8 @@ src/ServerScriptService        Bootstrap + Simulation (domain) + App (sessions, 
 src/StarterPlayer/...          ClientBootstrap + Controllers (net, state, map, UI) + UI (theme, components, panels)
 tests/                         Lune test runner, harness, specs A–J, place check, UI smoke test, reports
 tools/check_roblox_api.py      static Roblox API usage check
+tools/typecheck/               strict Luau type check (official analyzer + Roblox definitions)
+tools/render_map_preview.py    PNG preview of the map from content data
 docs/                          ARCHITECTURE, GAME_DESIGN, PHASES, TEST_PLAN
 ```
 
