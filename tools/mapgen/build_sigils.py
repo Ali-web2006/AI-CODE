@@ -23,7 +23,7 @@ sys.path.insert(0, str(HERE / "sigils"))
 import sigil_kit  # noqa: E402
 
 OUTPUT = ROOT / "src/ReplicatedStorage/Shared/Data/World/SigilArt.luau"
-HOUSES = ["stark", "arryn", "tully", "greyjoy", "lannister", "tyrell", "baratheon", "targaryen", "martell"]
+HOUSES = ["stark", "arryn", "tully", "greyjoy", "lannister", "tyrell", "baratheon", "targaryen", "martell", "frey", "bolton"]
 
 HEADER = """--!strict
 --[[
@@ -33,10 +33,13 @@ HEADER = """--!strict
 	Each sigil is a list of layers drawn bottom to top inside a 100 x 120 box (x right, y down):
 	the dark rim of a heater shield, the field, then the charge. A layer is one colour and a flat
 	list of triangles { x1, y1, x2, y2, x3, y3, ... }. UI/SigilView draws them.
+
+	`low` is the same art simplified for small crests (army banners): far fewer triangles, with
+	details smaller than a pixel at that size left out.
 ]]
 
 export type Layer = { color: string, tris: { number } }
-export type Sigil = { layers: { Layer } }
+export type Sigil = { layers: { Layer }, low: { Layer } }
 
 local SigilArt: { [string]: Sigil } = {
 """
@@ -56,16 +59,24 @@ def main():
             continue
         module = importlib.import_module(house)
         layers = sigil_kit.finish(module.build())
-        lines.append(f"\t{house} = {{ layers = {{")
-        count = 0
-        for colour, geom in layers:
-            tris = sigil_kit.triangulate(geom)
-            count += len(tris)
-            flat = ", ".join(f"{x:.1f}, {y:.1f}" for tri in tris for x, y in tri)
-            lines.append(f'\t\t{{ color = "{colour}", tris = {{ {flat} }} }},')
-        lines.append("\t} },")
+        lines.append(f"\t{house} = {{")
+        count = low_count = 0
+        for key, tolerance, min_area in (("layers", 0.25, 0.05), ("low", sigil_kit.LOW_DETAIL_TOLERANCE, sigil_kit.LOW_DETAIL_MIN_AREA)):
+            lines.append(f"\t\t{key} = {{")
+            for colour, geom in layers:
+                tris = sigil_kit.triangulate(geom, tolerance, min_area)
+                if not tris:
+                    continue
+                if key == "layers":
+                    count += len(tris)
+                else:
+                    low_count += len(tris)
+                flat = ", ".join(f"{x:.1f}, {y:.1f}" for tri in tris for x, y in tri)
+                lines.append(f'\t\t\t{{ color = "{colour}", tris = {{ {flat} }} }},')
+            lines.append("\t\t},")
+        lines.append("\t},")
         total += count
-        print(f"{house:10} {count:4} triangles")
+        print(f"{house:10} {count:4} triangles ({low_count} in the low-detail variant)")
         if args.sheet:
             path = Path(args.sheet).with_name(f"sigil_{house}.png")
             sigil_kit.render(module.build(), path, 240)

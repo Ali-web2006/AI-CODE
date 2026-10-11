@@ -258,6 +258,13 @@ return function(t)
 				triangles += #layer.tris // 6
 			end
 			expect.truthy(triangles <= 260, `{id} art is light enough to render ({triangles} triangles)`)
+			local low = 0
+			for _, layer in art.low do
+				expect.truthy(isHex(layer.color), `{id} low-detail layer colour`)
+				expect.equal(#layer.tris % 6, 0, `{id} low-detail triangles are complete`)
+				low += #layer.tris // 6
+			end
+			expect.truthy(low >= 10 and low <= 100, `{id} has a light low-detail variant for banners ({low} triangles)`)
 		end
 		local function over(region, crest, label: string)
 			local box = { minX = math.huge, minY = math.huge, maxX = -math.huge, maxY = -math.huge }

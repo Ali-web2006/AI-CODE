@@ -125,9 +125,14 @@ def finish(layers):
     return out
 
 
-def triangulate(geom, tolerance=0.25):
+# Simplification of the low-detail variant used for small crests (army banners, about 24 px tall).
+LOW_DETAIL_TOLERANCE = 2.5
+LOW_DETAIL_MIN_AREA = 6.0
+
+
+def triangulate(geom, tolerance=0.25, min_area=0.05):
     geom = shapely.make_valid(shapely.simplify(geom, tolerance, preserve_topology=True))
-    polygons = [g for g in shapely.get_parts(geom) if g.geom_type == "Polygon" and g.area > 0.05]
+    polygons = [g for g in shapely.get_parts(geom) if g.geom_type == "Polygon" and g.area > min_area]
     triangles = []
     for p in polygons:
         for t in shapely.get_parts(shapely.constrained_delaunay_triangles(p)):

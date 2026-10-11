@@ -7,6 +7,8 @@
 
 	The view keeps the art's 100:120 aspect ratio. A house without art yet shows a plain shield in
 	its fallback colour. Transparency fades the whole crest (used by the map at high zoom).
+	`detail = "low"` draws the simplified art meant for small crests such as army banners
+	(about a third of the parts).
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -30,6 +32,7 @@ export type Options = {
 	zIndex: number?,
 	fallbackColor: Color3?,
 	name: string?,
+	detail: ("full" | "low")?,
 }
 
 function SigilView.new(houseId: string, options: Options?): ViewportFrame
@@ -61,7 +64,8 @@ function SigilView.new(houseId: string, options: Options?): ViewportFrame
 		-- Higher layers are nearer the camera; shrinking each by (distance - height) / distance
 		-- about the box centre makes every layer project at exactly the same size.
 		local distance = camera.CFrame.Position.Y
-		for index, layer in art.layers do
+		local layers = if opts.detail == "low" then art.low else art.layers
+		for index, layer in layers do
 			local height = index * LAYER_STEP
 			local k = (distance - height) / distance
 			FlatTriangles.addList(parts, layer.tris, height, Color3.fromHex(layer.color), k, 50 * (1 - k), 60 * (1 - k))
