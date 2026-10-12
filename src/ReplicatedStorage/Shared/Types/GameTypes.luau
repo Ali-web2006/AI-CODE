@@ -29,6 +29,14 @@ export type TerrainDefinition = {
 	description: string,
 	taxMultiplier: number,
 	developmentCostMultiplier: number,
+	-- Multiplier on the days an army needs to march INTO a province of this terrain.
+	movementCost: number,
+	-- Multiplier on the levies a province of this terrain can raise.
+	manpower: number,
+	-- Ships a province of this terrain adds per development level (before the region's naval factor).
+	shipsPerDevelopment: number,
+	-- Multiplier on the supply an army loses while foraging in hostile country of this terrain.
+	supplyDrain: number,
 	color: RGB,
 }
 
@@ -38,6 +46,13 @@ export type HoldingKindDefinition = {
 	description: string,
 	taxMultiplier: number,
 	garrisonUpkeep: number,
+	-- Multiplier on the levies the holding can raise (fortresses and cities raise fewer men).
+	levyMultiplier: number,
+	-- Garrison maximum = garrisonBase + garrisonPerDevelopment * development.
+	garrisonBase: number,
+	garrisonPerDevelopment: number,
+	-- Ships the holding adds per development level (before the region's naval factor).
+	shipsPerDevelopment: number,
 	-- Map marker shape drawn with plain frames (no art assets required).
 	marker: "square" | "diamond" | "circle" | "ring",
 }
@@ -45,6 +60,10 @@ export type HoldingKindDefinition = {
 export type RegionDefinition = {
 	id: string,
 	name: string,
+	-- Multiplier on the levies of every province in the region.
+	manpower: number,
+	-- Multiplier on the ships of every province in the region (the Iron Islands live on the sea).
+	naval: number,
 }
 
 export type ProvinceDefinition = {
@@ -184,6 +203,51 @@ export type MapDefinition = {
 	height: number,
 }
 
+-- Military content (Data/Military/UnitDefinitions) -------------------------------------------
+
+export type UnitClass = "spear" | "archer" | "cavalry" | "siege"
+
+-- Special circumstances in which some units fight better (hooks for the raid, landing and river
+-- crossing rules of later phases).
+export type UnitSituation = "raid" | "landing" | "riverDefense"
+
+export type UnitDefinition = {
+	id: string,
+	name: string,
+	class: UnitClass,
+	description: string,
+	attack: number,
+	defense: number,
+	-- Morale bonus (0..30) added to the army's starting morale, weighted by head count.
+	morale: number,
+	-- Movement multiplier: 1 = men on foot. An army moves at the speed of its slowest unit.
+	speed: number,
+	-- Gold upkeep factor: 1 = levy spearmen.
+	upkeep: number,
+	-- Damage to walls; 0 for everything but siege engines.
+	siege: number,
+	-- Set for the unique unit of a great house; only that house's composition may use it.
+	houseId: string?,
+	-- Combat multipliers on particular terrain (terrain id -> factor).
+	terrain: { [string]: number }?,
+	-- Combat multipliers in particular regions (region id -> factor), e.g. the snows of the North.
+	regions: { [string]: number }?,
+	-- Combat multipliers in particular situations (UnitSituation -> factor).
+	situations: { [string]: number }?,
+}
+
+export type MilitaryDefinitions = {
+	classes: { UnitClass },
+	-- counters[attackerClass][targetClass] = damage multiplier; a missing entry means 1. "walls" is
+	-- a pseudo-class used by sieges.
+	counters: { [string]: { [string]: number } },
+	units: { UnitDefinition },
+	-- House id -> unit id -> share of every levy that house raises (shares sum to 1).
+	compositions: { [string]: { [string]: number } },
+	-- Used by houses without an entry in `compositions`.
+	defaultComposition: { [string]: number },
+}
+
 -- Campaign state ----------------------------------------------------------------------------
 
 export type LedgerEntry = {
@@ -211,6 +275,41 @@ export type ProvinceState = {
 	-- The military occupier. nil means the legal owner controls the province.
 	occupierHouseId: string?,
 	development: number,
+	-- Men who can be raised into armies here (integer, 0..MilitaryRules.levyMax). Raising empties
+	-- the pool; it refills monthly.
+	levies: number,
+	-- Men who hold the walls and never march (integer, 0..MilitaryRules.garrisonMax).
+	garrisonTroops: number,
+}
+
+--[[
+	An army in the field. Movement is stored as a route plus the day numbers of the current leg, so
+	nothing changes between departure and arrival and clients interpolate the position themselves:
+	  in transit  legStartDay and legEndDay set: marching from locationId to route[1]
+	  waiting     both nil with a non-empty route: a sea leg is next and too few ships are free
+	  idle        both nil with an empty route
+]]
+export type ArmyState = {
+	id: string, -- "army_<serial>"
+	houseId: string,
+	-- Province the army was raised in; names it ("Army of <holding name>").
+	originId: string,
+	commanderId: string?,
+	-- Where the army is; while in transit, the province it left.
+	locationId: string,
+	-- unitId -> men (integers > 0; never empty).
+	units: { [string]: number },
+	morale: number, -- integer 0..MoraleMax
+	supply: number, -- integer 0..SupplyMax
+	-- Remaining stops; route[1] is the next province. Empty when idle.
+	route: { string },
+	-- CalendarDate.toDayNumber when the current leg (locationId -> route[1]) began and ends.
+	legStartDay: number?,
+	legEndDay: number?,
+	-- Merge into an idle army of the same house on arrival (armies answering a call to arms).
+	gather: boolean,
+	-- Supply has run out (set once, so the starvation event fires once).
+	starving: boolean,
 }
 
 export type CharacterState = {
@@ -261,6 +360,9 @@ export type CampaignState = {
 	provinces: { [string]: ProvinceState },
 	characters: { [string]: CharacterState },
 	relations: { [string]: RelationState },
+	armies: { [string]: ArmyState },
+	-- Serial of the next army id ("army_<serial>"); only ever grows, so ids are never reused.
+	nextArmySerial: number,
 }
 
 -- Commands & events -------------------------------------------------------------------------

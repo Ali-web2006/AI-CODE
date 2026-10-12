@@ -48,6 +48,8 @@ export type HouseBudget = {
 	courtUpkeep: number,
 	garrisonUpkeep: number,
 	administration: number,
+	-- Upkeep of the house's raised armies (MilitaryRules.upkeep summed over them).
+	armyUpkeep: number,
 	expenses: number,
 	net: number,
 }
@@ -146,12 +148,15 @@ end
 	Full monthly budget of a house.
 	ownedProvinces: every province whose ownerHouseId is the house (any order; output is sorted).
 	Occupied provinces (occupierHouseId set to another house) yield no income and cost no upkeep.
+	armyUpkeep: the monthly gold upkeep of the house's armies, already summed by the caller
+	(Economy.budgetFor), so this module stays free of army state.
 ]]
 function EconomyRules.computeHouseBudget(
 	houseId: string,
 	ownedProvinces: { ProvinceLike },
 	ruler: CharacterLike?,
-	config: EconomyConfig
+	config: EconomyConfig,
+	armyUpkeep: number
 ): HouseBudget
 	local houseDefinition = Content.houses[houseId]
 
@@ -185,7 +190,7 @@ function EconomyRules.computeHouseBudget(
 	local courtMultiplier, courtLines = EconomyRules.courtMultiplier(ruler)
 	local taxIncome = gross * taxMultiplier
 	local courtUpkeep = houseDefinition.courtUpkeep * courtMultiplier
-	local expenses = courtUpkeep + garrisonTotal + administrationTotal
+	local expenses = courtUpkeep + garrisonTotal + administrationTotal + armyUpkeep
 
 	return {
 		provinceLines = lines,
@@ -199,6 +204,7 @@ function EconomyRules.computeHouseBudget(
 		courtUpkeep = courtUpkeep,
 		garrisonUpkeep = garrisonTotal,
 		administration = administrationTotal,
+		armyUpkeep = armyUpkeep,
 		expenses = expenses,
 		net = taxIncome - expenses,
 	}

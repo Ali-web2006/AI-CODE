@@ -2,19 +2,22 @@
 --[[
 	CampaignSerializer — versioned conversion between live campaign state and a save record.
 
-	Save record schema (schemaVersion 1, documented in docs/ARCHITECTURE.md §Persistence):
+	Save record schema (schemaVersion 2, documented in docs/ARCHITECTURE.md §Persistence):
 	{
 	  format        = "IronThroneCampaign",
-	  schemaVersion = 1,
+	  schemaVersion = 2,
 	  savedAt       = unix seconds (number),
 	  summary       = { campaignId, bookmarkId, date = {year,month,day}, hostHouseId? },
 	  campaign      = {
-	    campaignId, bookmarkId, seed, rngState,
+	    campaignId, bookmarkId, seed, rngState, nextArmySerial,
 	    clock      = { date, speed, lastProcessedMonthIndex },     -- loads paused
 	    houses     = { [houseId] = { treasury, rulerId, extinct, ledger, aiNextEvaluationMonth } },
-	    provinces  = { [provinceId] = { ownerHouseId, occupierHouseId?, development } },
+	    provinces  = { [provinceId] = { ownerHouseId, occupierHouseId?, development, levies,
+	                                    garrisonTroops } },
 	    characters = { [characterId] = { ...full character record... } },
 	    relations  = { [relationKey] = { score, baseline, cooldowns } },
+	    armies     = { [armyId] = { houseId, originId, commanderId?, locationId, units, morale,
+	                                supply, route, legStartDay?, legEndDay?, gather, starving } },
 	  },
 	}
 	The repository adds `revision` and `writerSessionId` for concurrency control.
@@ -25,9 +28,12 @@
 	Content drift: entities present in the bookmark but missing from the save (content added after
 	the save was made) are initialised from the bookmark and reported as warnings. Entities in the
 	save that no longer exist in content are errors: the save is rejected and the live campaign is
-	left untouched.
+	left untouched. Armies are not content: the saved set replaces the (empty) bookmark set, and an
+	army that references an unknown province, unit, house or character fails the load.
 
 	Migrations: MIGRATIONS[n] upgrades a campaign table from version n to n + 1.
+	  1 -> 2  adds armies (none) and the army id counter. Province levy and garrison pools did not
+	          exist in schema 1: they load full at the saved development, without a warning.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -35,6 +41,7 @@ local CalendarDate = require(ReplicatedStorage.Shared.Util.CalendarDate)
 local Content = require(ReplicatedStorage.Shared.Data.Content)
 local DeterministicRng = require(ReplicatedStorage.Shared.Util.DeterministicRng)
 local GameTypes = require(ReplicatedStorage.Shared.Types.GameTypes)
+local MilitaryRules = require(ReplicatedStorage.Shared.Rules.MilitaryRules)
 local TableUtil = require(ReplicatedStorage.Shared.Util.TableUtil)
 local CampaignState = require(script.Parent.Parent.Simulation.CampaignState)
 local SimContext = require(script.Parent.Parent.Simulation.SimContext)
@@ -46,8 +53,15 @@ local CampaignSerializer = {}
 
 CampaignSerializer.Format = "IronThroneCampaign"
 
--- No migrations exist yet: schema version 1 is the first persisted format.
 local MIGRATIONS: { [number]: (campaign: { [string]: any }) -> { [string]: any } } = {}
+
+-- Schema 1 -> 2: armies did not exist. The campaign table is still unvalidated here (deserialize
+-- checks it afterwards), so this touches only top-level keys and never indexes a subtable.
+MIGRATIONS[1] = function(campaign: { [string]: any }): { [string]: any }
+	campaign.armies = {}
+	campaign.nextArmySerial = 1
+	return campaign
+end
 
 export type SaveSummary = {
 	campaignId: string,
@@ -106,6 +120,26 @@ function CampaignSerializer.serialize(state: GameTypes.CampaignState, savedAt: n
 			ownerHouseId = province.ownerHouseId,
 			occupierHouseId = province.occupierHouseId,
 			development = province.development,
+			levies = province.levies,
+			garrisonTroops = province.garrisonTroops,
+		}
+	end
+
+	local armies = {}
+	for armyId, army in state.armies do
+		armies[armyId] = {
+			houseId = army.houseId,
+			originId = army.originId,
+			commanderId = army.commanderId,
+			locationId = army.locationId,
+			units = table.clone(army.units),
+			morale = army.morale,
+			supply = army.supply,
+			route = table.clone(army.route),
+			legStartDay = army.legStartDay,
+			legEndDay = army.legEndDay,
+			gather = army.gather,
+			starving = army.starving,
 		}
 	end
 
@@ -153,6 +187,7 @@ function CampaignSerializer.serialize(state: GameTypes.CampaignState, savedAt: n
 			bookmarkId = state.bookmarkId,
 			seed = state.seed,
 			rngState = state.rng.state,
+			nextArmySerial = state.nextArmySerial,
 			clock = {
 				date = CalendarDate.clone(state.clock.date),
 				speed = state.clock.speed,
@@ -162,6 +197,7 @@ function CampaignSerializer.serialize(state: GameTypes.CampaignState, savedAt: n
 			provinces = provinces,
 			characters = characters,
 			relations = relations,
+			armies = armies,
 		},
 	}
 end
@@ -241,6 +277,90 @@ local function readCharacter(id: string, data: any, errors: { string }): GameTyp
 	}
 end
 
+--[[
+	Reads one saved army. References are checked against content and the already loaded houses and
+	characters; ranges, adjacency and commander rules are left to StateInvariants.
+]]
+local function readArmy(id: string, data: any, state: GameTypes.CampaignState, errors: { string }): GameTypes.ArmyState?
+	local where = `army '{id}'`
+	local function invalid(problem: string): GameTypes.ArmyState?
+		table.insert(errors, `{where}: {problem}`)
+		return nil
+	end
+	if string.match(id, "^army_%d+$") == nil then
+		return invalid("id is not of the form army_<serial>")
+	end
+	if type(data) ~= "table" then
+		return invalid("not a table")
+	end
+	if type(data.houseId) ~= "string" or not state.houses[data.houseId] then
+		return invalid(`unknown house '{tostring(data.houseId)}'`)
+	end
+	for _, field in { "originId", "locationId" } do
+		local provinceId = data[field]
+		if type(provinceId) ~= "string" or not Content.provinces[provinceId] then
+			return invalid(`unknown province '{tostring(provinceId)}' in {field}`)
+		end
+	end
+	if data.commanderId ~= nil and (type(data.commanderId) ~= "string" or not state.characters[data.commanderId]) then
+		return invalid(`unknown commander '{tostring(data.commanderId)}'`)
+	end
+	if type(data.units) ~= "table" then
+		return invalid("units missing")
+	end
+	local units: { [string]: number } = {}
+	for unitId, count in data.units do
+		if type(unitId) ~= "string" or not Content.units[unitId] then
+			return invalid(`unknown unit '{tostring(unitId)}'`)
+		end
+		if not isInteger(count) then
+			return invalid(`unit '{unitId}' has an invalid head count`)
+		end
+		units[unitId] = count
+	end
+	if not isInteger(data.morale) or not isInteger(data.supply) then
+		return invalid("morale or supply invalid")
+	end
+	if type(data.route) ~= "table" then
+		return invalid("route missing")
+	end
+	local count = 0
+	for _ in data.route do
+		count += 1
+	end
+	local route: { string } = {}
+	for index = 1, count do
+		local stop = data.route[index]
+		if type(stop) ~= "string" or not Content.provinces[stop] then
+			return invalid(`route stop {index} '{tostring(stop)}' is not a province`)
+		end
+		table.insert(route, stop)
+	end
+	for _, field in { "legStartDay", "legEndDay" } do
+		if data[field] ~= nil and not isInteger(data[field]) then
+			return invalid(`{field} invalid`)
+		end
+	end
+	if type(data.gather) ~= "boolean" or type(data.starving) ~= "boolean" then
+		return invalid("flags invalid")
+	end
+	return {
+		id = id,
+		houseId = data.houseId,
+		originId = data.originId,
+		commanderId = data.commanderId,
+		locationId = data.locationId,
+		units = units,
+		morale = data.morale,
+		supply = data.supply,
+		route = route,
+		legStartDay = data.legStartDay,
+		legEndDay = data.legEndDay,
+		gather = data.gather,
+		starving = data.starving,
+	}
+end
+
 function CampaignSerializer.deserialize(record: any, config: Config): DeserializeResult
 	local errors: { string } = {}
 	local warnings: { string } = {}
@@ -263,6 +383,8 @@ function CampaignSerializer.deserialize(record: any, config: Config): Deserializ
 		return fail("save has no campaign data")
 	end
 	local version = record.schemaVersion
+	-- Province levy and garrison pools exist from schema 2 on; older saves load them full.
+	local poolsSaved = version >= 2
 	while version < config.SchemaVersion do
 		local migrate = MIGRATIONS[version]
 		if not migrate then
@@ -291,6 +413,7 @@ function CampaignSerializer.deserialize(record: any, config: Config): Deserializ
 		schemaVersion = config.SchemaVersion,
 		clockConfig = config.Clock,
 		aiConfig = config.AI,
+		militaryConfig = config.Military,
 	})
 	state.rng.state = campaign.rngState
 
@@ -376,9 +499,18 @@ function CampaignSerializer.deserialize(record: any, config: Config): Deserializ
 			or (data.occupierHouseId ~= nil and type(data.occupierHouseId) ~= "string") then
 			return fail(`province '{provinceId}' is malformed`)
 		end
+		local levies, garrisonTroops = data.levies, data.garrisonTroops
+		if not poolsSaved and levies == nil and garrisonTroops == nil then
+			levies = MilitaryRules.levyMax(provinceId, data.development, config.Military)
+			garrisonTroops = MilitaryRules.garrisonMax(provinceId, data.development, config.Military)
+		elseif not isInteger(levies) or not isInteger(garrisonTroops) then
+			return fail(`province '{provinceId}' is malformed`)
+		end
 		province.ownerHouseId = data.ownerHouseId
 		province.occupierHouseId = data.occupierHouseId
 		province.development = data.development
+		province.levies = levies
+		province.garrisonTroops = garrisonTroops
 	end
 	for provinceId in state.provinces do
 		if campaign.provinces[provinceId] == nil then
@@ -408,6 +540,27 @@ function CampaignSerializer.deserialize(record: any, config: Config): Deserializ
 		relation.baseline = data.baseline
 		relation.cooldowns = cooldowns
 	end
+
+	-- Armies replace the bookmark's (empty) set: an army absent from the save no longer exists.
+	if type(campaign.armies) ~= "table" then
+		return fail("armies are missing")
+	end
+	if not isInteger(campaign.nextArmySerial) then
+		return fail("the army id counter is invalid")
+	end
+	local armies: { [string]: GameTypes.ArmyState } = {}
+	for armyId, data in campaign.armies do
+		if type(armyId) ~= "string" then
+			return fail("army table has a non-string key")
+		end
+		local army = readArmy(armyId, data, state, errors)
+		if not army then
+			return { ok = false, state = nil, errors = errors, warnings = warnings }
+		end
+		armies[armyId] = army
+	end
+	state.armies = armies
+	state.nextArmySerial = campaign.nextArmySerial
 
 	local violations = StateInvariants.check(state, config)
 	if #violations > 0 then

@@ -36,6 +36,13 @@ Protocol.Commands = table.freeze({
 	-- Game actions (handled by the CommandProcessor; also used by the AI)
 	DevelopProvince = "DevelopProvince",
 	ImproveRelations = "ImproveRelations",
+	RaiseArmy = "RaiseArmy",
+	RaiseAllLevies = "RaiseAllLevies",
+	MoveArmy = "MoveArmy",
+	StopArmy = "StopArmy",
+	SplitArmy = "SplitArmy",
+	MergeArmies = "MergeArmies",
+	DisbandArmy = "DisbandArmy",
 })
 
 Protocol.ResultCodes = table.freeze({
@@ -54,6 +61,10 @@ Protocol.ResultCodes = table.freeze({
 	MaxDevelopment = "MaxDevelopment",
 	MaxRelation = "MaxRelation",
 	OnCooldown = "OnCooldown",
+	NotEnoughTroops = "NotEnoughTroops",
+	NoPath = "NoPath",
+	NotEnoughShips = "NotEnoughShips",
+	LimitReached = "LimitReached",
 	CampaignNotRunning = "CampaignNotRunning",
 	StorageUnavailable = "StorageUnavailable",
 	SaveConflict = "SaveConflict",

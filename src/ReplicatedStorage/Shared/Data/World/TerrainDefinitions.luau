@@ -1,6 +1,10 @@
 --!strict
 -- Terrain categories. taxMultiplier scales province income; developmentCostMultiplier scales the
--- price of developing a province. Future phases add movement, supply and combat modifiers here.
+-- price of developing a province.
+-- Military (GameConfig.Military, MilitaryRules): movementCost multiplies the days an army needs to
+-- march INTO the terrain; manpower multiplies the province's levies; shipsPerDevelopment adds ships
+-- per development level; supplyDrain multiplies the supply an army loses foraging in hostile
+-- country. Combat modifiers for particular units live in Data/Military/UnitDefinitions.
 
 local GameTypes = require(script.Parent.Parent.Parent.Types.GameTypes)
 
@@ -11,6 +15,10 @@ local definitions: { GameTypes.TerrainDefinition } = {
 		description = "Open, settled country. Easy to farm and to administer.",
 		taxMultiplier = 1.0,
 		developmentCostMultiplier = 1.0,
+		movementCost = 1.0,
+		manpower = 1.0,
+		shipsPerDevelopment = 0,
+		supplyDrain = 1.0,
 		color = { 196, 184, 132 },
 	},
 	{
@@ -19,6 +27,10 @@ local definitions: { GameTypes.TerrainDefinition } = {
 		description = "The richest soil in the realm. Fields yield more and are cheaper to improve.",
 		taxMultiplier = 1.15,
 		developmentCostMultiplier = 0.95,
+		movementCost = 1.0,
+		manpower = 1.25,
+		shipsPerDevelopment = 0,
+		supplyDrain = 0.8,
 		color = { 178, 182, 108 },
 	},
 	{
@@ -27,6 +39,10 @@ local definitions: { GameTypes.TerrainDefinition } = {
 		description = "Dense woodland. Sparse settlement and costly clearance.",
 		taxMultiplier = 0.85,
 		developmentCostMultiplier = 1.1,
+		movementCost = 1.3,
+		manpower = 0.85,
+		shipsPerDevelopment = 0,
+		supplyDrain = 1.1,
 		color = { 112, 132, 88 },
 	},
 	{
@@ -35,6 +51,10 @@ local definitions: { GameTypes.TerrainDefinition } = {
 		description = "Rugged uplands with scattered holdfasts and mines.",
 		taxMultiplier = 0.9,
 		developmentCostMultiplier = 1.15,
+		movementCost = 1.25,
+		manpower = 0.9,
+		shipsPerDevelopment = 0,
+		supplyDrain = 1.1,
 		color = { 164, 140, 102 },
 	},
 	{
@@ -43,6 +63,10 @@ local definitions: { GameTypes.TerrainDefinition } = {
 		description = "High passes and stone keeps. Poor tax base and expensive works.",
 		taxMultiplier = 0.75,
 		developmentCostMultiplier = 1.35,
+		movementCost = 1.7,
+		manpower = 0.8,
+		shipsPerDevelopment = 0,
+		supplyDrain = 1.5,
 		color = { 136, 124, 114 },
 	},
 	{
@@ -51,6 +75,10 @@ local definitions: { GameTypes.TerrainDefinition } = {
 		description = "Bog and fen. Little can be taxed and little can be built.",
 		taxMultiplier = 0.7,
 		developmentCostMultiplier = 1.25,
+		movementCost = 1.8,
+		manpower = 0.6,
+		shipsPerDevelopment = 0,
+		supplyDrain = 1.4,
 		color = { 112, 128, 104 },
 	},
 	{
@@ -59,6 +87,10 @@ local definitions: { GameTypes.TerrainDefinition } = {
 		description = "Fishing villages and harbours along the shore.",
 		taxMultiplier = 1.05,
 		developmentCostMultiplier = 1.0,
+		movementCost = 1.0,
+		manpower = 1.0,
+		shipsPerDevelopment = 2,
+		supplyDrain = 1.0,
 		color = { 176, 178, 150 },
 	},
 	{
@@ -67,6 +99,10 @@ local definitions: { GameTypes.TerrainDefinition } = {
 		description = "Wind-battered isles. Everything must come by ship.",
 		taxMultiplier = 0.9,
 		developmentCostMultiplier = 1.2,
+		movementCost = 1.0,
+		manpower = 0.8,
+		shipsPerDevelopment = 4,
+		supplyDrain = 1.2,
 		color = { 132, 140, 146 },
 	},
 	{
@@ -75,6 +111,10 @@ local definitions: { GameTypes.TerrainDefinition } = {
 		description = "Sand and scrub, settled only along rivers and coasts.",
 		taxMultiplier = 0.8,
 		developmentCostMultiplier = 1.2,
+		movementCost = 1.4,
+		manpower = 0.8,
+		shipsPerDevelopment = 0,
+		supplyDrain = 1.6,
 		color = { 214, 178, 120 },
 	},
 }

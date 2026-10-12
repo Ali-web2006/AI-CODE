@@ -23,10 +23,10 @@ npm --prefix tools/typecheck install
 | Check | Command | What it proves |
 |---|---|---|
 | Compile | `lune run tests/compile_check.luau` | Every `.luau` file parses and compiles |
-| Scenario tests | `lune run tests/run.luau [filter]` | 81 deterministic tests of the simulation, sessions, security, persistence, the client replica and the world map configuration (Scenarios A–K below) |
+| Scenario tests | `lune run tests/run.luau [filter]` | 123 deterministic tests of the simulation, sessions, security, persistence, the client replica, the world map configuration and the military (Scenarios A–L below) |
 | Lint | `selene src tests` | Roblox standard library: globals, Enum items, datatype constructors, unused code |
 | Rojo build | `rojo build default.project.json -o build/IronThrone.rbxl` | The project maps into a valid place |
-| Place check | `lune run tests/place_check.luau build/IronThrone.rbxl` | The built place has the expected tree; `Players.CharacterAutoLoads` is false; all 75 ModuleScripts (client UI included) resolve their requires and run their top-level code against real Roblox datatypes |
+| Place check | `lune run tests/place_check.luau build/IronThrone.rbxl` | The built place has the expected tree; `Players.CharacterAutoLoads` is false; all 86 ModuleScripts (client UI included) resolve their requires and run their top-level code against real Roblox datatypes |
 | UI smoke test | `lune run tests/ui_smoke.luau build/IronThrone.rbxl` | The real client code runs against the real server pipeline. Every property assignment is validated against Roblox's reflection database, buttons are clicked by their text, and the whole core loop is played (§2.J) |
 | API check | `python3 tools/check_roblox_api.py --dump build/API-Dump.json src` | Class names, property keys in `UI.create`, Enum items, services, events and methods exist in the Roblox API dump |
 | Type check | `lune run tools/typecheck/record_requires.luau build/IronThrone.rbxl build/requires.json` then `node tools/typecheck/typecheck.mjs build/requires.json build/globalTypes.d.luau` | Every script type-checks in `--!strict` with the official Luau analyzer (new solver) against luau-lsp's Roblox definitions. Instance-path requires are resolved from recorded call sites, so cross-module types are checked |
@@ -50,16 +50,17 @@ Test infrastructure:
 
 | Scenario | Spec | Cases |
 |---|---|---|
-| A — Initialization | `a_initialization.spec.luau` | All modules load; content validates with no errors or warnings; 10 houses and 34 provinces; invariants hold; starting values come from the bookmark. Validator catches duplicate ids, broken or asymmetric adjacency, bad owners, dead or missing rulers, broken family links. The host refuses to start on bad content. |
+| A — Initialization | `a_initialization.spec.luau` | All modules load; content validates with no errors or warnings; 10 houses and 34 provinces; invariants hold; starting values come from the bookmark. Validator catches duplicate ids, broken or asymmetric adjacency, bad owners, dead or missing rulers, broken family links, invalid unit tables (unknown or foreign units in a composition, shares not summing to 1, bad counters, classes, terrain or situation keys) and invalid military fields of terrains, holdings and regions. The host refuses to start on bad content. |
 | B — House selection | `b_house_selection.spec.luau` | Correct starting state. No second house. No taking another player's house. Unknown houses and unconnected users rejected. Acting house comes from the session (forged `houseId` rejected). Reservation on disconnect and restore on rejoin. Host election. Auto-pause. |
 | C — Province inspection | `c_province_inspection.spec.luau` | Five provinces' owners, development and income match the formula; development cost and next-level income; every province in the sync payload; budget equals the sum of its lines. |
 | D — Clock | `d_clock.spec.luau` | Paused time frozen; each speed advances ~50 days in 50 day-lengths at 60 Hz; exact multiples exact; negative/NaN/infinite/zero time ignored; hitch capped at 10 days; one simulated year with constant speed changes and pauses processes exactly 12 months; treasury follows the ledger exactly; duplicate month refused; calendar arithmetic; speed and pause permissions. |
 | E — Development | `e_development.spec.luau` | Exact cost charged once; development +1; next month's income rises by the formula's amount; unaffordable, foreign, occupied, maxed, unknown and malformed requests all rejected with state unchanged; costs escalate; treasury never negative. |
 | F — Diplomacy | `f_diplomacy.spec.luau` | Explained gain (+12 for Stark → Lannister) charged once; preview lines sum to the gain; repeats hit the cooldown without charging; cooldown expires after 6 months; drift of 1 per month; self, unknown, extinct and malformed targets rejected; insufficient funds; clamp at 100. |
-| G — AI | `g_ai.spec.luau` | 20 years: no treasury ever negative, invariants hold, development increases, no rejected AI commands. AI both develops and sends envoys. Candidates within spendable gold. Player houses untouched. Same seed gives an identical campaign. Trait-driven personality. Evaluation budget respected. |
-| H — Security | `h_security.spec.luau` | Malformed command names; 19 malformed payload shapes; missing house and entities; spam rate limited with the cost charged once; storage cooldowns; save-info throttling; non-host restrictions; debug disabled in production; 2,000 fuzzed requests never throw and create no gold. |
-| I — Persistence | `i_persistence.spec.luau` | Fresh and 30-month campaigns round-trip through JSON exactly; 9 malformed saves rejected with reasons; content drift handled; transient failures retried with 1 s and 2 s backoff, and the attempt cap leaves storage untouched; an older session cannot overwrite a newer save; oversized saves refused; host save → play → load restores state and resyncs clients; a corrupt slot leaves the live campaign untouched; unavailable storage reported while gameplay continues; dev and prod storage names differ. |
+| G — AI | `g_ai.spec.luau` | 20 years: no treasury ever negative, invariants hold, development increases, no rejected AI commands. AI both develops and sends envoys. Candidates within spendable gold. Player houses untouched (no developments, envoys or armies). Same seed gives an identical campaign. Trait-driven personality. Evaluation budget respected. |
+| H — Security | `h_security.spec.luau` | Malformed command names; 33 malformed payload shapes (14 of them for army commands: forged `houseId`, missing or extra fields, non-id, NaN, table and over-long ids); missing house and entities; spam rate limited with the cost charged once; storage cooldowns; save-info throttling; non-host restrictions; debug disabled in production; 2,000 fuzzed requests (army fields included, against a real army) never throw, never fail on the server and create no gold; 1,500 fuzzed army orders against real and foreign armies over five months of play keep every invariant, carry out every kind of order, raise no server error and leave every gold change in the ledger. |
+| I — Persistence | `i_persistence.spec.luau` | Fresh, 30-month and mid-march campaigns (armies marching by land and sea, waiting for ships, gathering, leaderless) round-trip through JSON exactly; a schema 1 save loads without warnings, with no armies and full levy and garrison pools sized to the saved development; 9 malformed saves and 24 malformed army and pool cases rejected with reasons; content drift handled; transient failures retried with 1 s and 2 s backoff, and the attempt cap leaves storage untouched; an older session cannot overwrite a newer save; oversized saves refused; host save → play → load restores state and resyncs clients; a corrupt slot leaves the live campaign untouched; unavailable storage reported while gameplay continues; dev and prod storage names differ. |
 | J — Integration | `j_integration.spec.luau` + `tests/ui_smoke.luau` | Full session through the request and replication pipeline with the client replica (select → inspect → time → develop → envoy → pause/resume → save → play → load), plus sequence-gap and resync handling. The UI smoke test repeats the loop by clicking the real interface, including the map: drawn land, nine crests and house labels, a click on Harrenhal's land, the hover outline of the Vale, and the sub-territory border toggle. |
+| L — Military | `l_military.spec.luau` | Formulas: exact levies, garrisons and ships, growing pools at every development, lore totals and ordering (Tyrell largest; Greyjoy the smallest great host but about 200 ships, the most), fortress and city trade-offs; composition split by largest remainder (exact totals, id tie-break), halving, army speed, exact leg days by road, marsh, pass, river and sea, optimal and deterministic routes (checked against Floyd–Warshall for every pair), upkeep, strength and morale. Simulation: raising (composition, emptied pool, best commander, children excluded, journal marks, events); commander ranking; calling every levy (rally first, gathering and merging on arrival into an idle army only, every unit conserved; a new order or a stop releases a gathering army); march timing to the day (Winterfell → Moat Cailin in 28 days, no replication mid-leg); re-routing keeps the current leg; stop; sea crossings (Greyjoy sails Pyke → Lannisport in 9 days, Stark and Frey cannot cross without ships, a small detachment can); ships at sea delay a second embarkation; split and merge conserve every man (weighted morale and supply, commander rules); disband refills pools by shortfall, never above the maximum, without gold; upkeep in the budget and once in the ledger; supply drain, starvation attrition and recovery at home; desertion; monthly refills (occupied provinces excepted, rounding free of floating-point noise); every rejection by code with state unchanged; event text; determinism; replication through the host into the client replica, including removals. |
 | K — World map | `k_map.spec.luau` | Exactly nine great houses with the specified palettes and seats; every region references a valid house and matches a game region; 4–10 sub-territories per region, each selecting a real province of that region, with valid shades; no overlaps and region outlines that agree with their sub-territories (sampled every 9 units); required locations present, each holding on its own province's land and matching the province position; the Wall band at y 80–130 across the continent, the Gift below it, the Stepstones; sigil art for all nine houses; exact triangulation of every outline. |
 
 ## 3. Manual Studio procedures (not yet performed)
@@ -126,6 +127,9 @@ Setup:
    **Expected:** `{ ok = false, code = "NotOwner" }`.
 2. Run the same call with `{ provinceId = "winterfell", houseId = "lannister" }`. **Expected:**
    `InvalidPayload`.
+3. Run `...Command:InvokeServer("RaiseArmy", { provinceId = "casterly_rock" })`. **Expected:**
+   `NotOwner`. Then, as another player's house raises an army, try `MoveArmy` or `DisbandArmy` on
+   its id from your client. **Expected:** `NotOwner`.
 
 ### 3.8 Persistence (Scenario I)
 1. With no setup, open the Campaign menu. **Expected:** the storage status reads "server memory
@@ -149,7 +153,20 @@ Setup:
 4. Close player 1. **Expected:** player 2 becomes host; Stark is reserved for 5 minutes and
    governed by the AI.
 
-### 3.10 Mobile layout
+### 3.10 Armies from the command bar (Scenario L, server side)
+The army interface is checked separately; these steps exercise the server through the remote.
+1. As House Stark, run `...Command:InvokeServer("RaiseArmy", { provinceId = "winterfell" })`.
+   **Expected:** `ok = true`, "Raised 10,800 men at Winterfell.", and a Chronicle entry.
+2. Run `...Command:InvokeServer("MoveArmy", { armyId = "army_1", provinceId = "moat_cailin" })`.
+   **Expected:** "The Army of Winterfell marches to Moat Cailin (28 days)." Resume the clock: the
+   army reaches Moat Cailin 28 days later and the Chronicle says so.
+3. Run `MoveArmy` to `dragonstone`. **Expected:** `NotEnoughShips`.
+4. Let a month pass with the army raised. **Expected:** that month's expenses (Realm → Settled
+   months) are 18.06 gold higher than the month before: the army's upkeep.
+5. Run `DisbandArmy` with `{ armyId = "army_1" }`. **Expected:** the men return to the levy pools
+   and no gold is refunded.
+
+### 3.11 Mobile layout
 1. Use the Device emulator (for example an iPhone landscape profile). **Expected:**
    * the compact layout is used;
    * the panel can be hidden;

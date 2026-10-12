@@ -20,6 +20,14 @@ see [docs/PHASES.md](docs/PHASES.md). The manual Studio playtest in
 * **Develop Province:** a validated action with cost, payback preview and real income effect.
 * **Improve Relations:** a validated envoy action. Relations are symmetric and drift back toward
   historical baselines, each with its reason.
+* **Military:** every province musters levies and keeps a garrison, and coasts, islands and ports
+  give ships, calibrated to the lore of 297 AC (the Reach fields the largest host, the Iron
+  Islands the largest fleet). Twelve unit types with counters, including a unique unit for each
+  great house, are kept in one data table. Houses raise armies from their levies (one province or
+  all at once, gathering at a rally point), led by their best commanders, and march them over
+  roads, rivers, passes and sea lanes, taking days that depend on distance, terrain, connection
+  and the slowest unit. Armies can be stopped, split, merged and disbanded; they cost upkeep every
+  month, live off their own land and starve abroad. Levies refill monthly.
 * **AI rulers:** they develop their lands and court each other through the same validated
   commands players use.
 * **Saves:** versioned save/load with revision-conflict protection, retries, and a labelled
@@ -65,7 +73,7 @@ npm --prefix tools/typecheck install            # official Luau analyzer (WASM),
 
 `verify.sh` runs:
 * a compile check of every file;
-* the 81 scenario tests;
+* the 123 scenario tests;
 * Selene;
 * a Rojo build;
 * a check of the built place;
@@ -83,7 +91,7 @@ default.project.json        Rojo mapping (ReplicatedStorage.Shared, ServerScript
 src/ReplicatedStorage/Shared   config, types, content, pure rules, protocol, text, utilities
 src/ServerScriptService        Bootstrap + Simulation (domain) + App (sessions, routing, saves) + Services (Roblox adapters)
 src/StarterPlayer/...          ClientBootstrap + Controllers (net, state, map, UI) + UI (theme, components, panels)
-tests/                         Lune test runner, harness, specs A–J, place check, UI smoke test, reports
+tests/                         Lune test runner, harness, specs A–L, place check, UI smoke test, reports
 tools/check_roblox_api.py      static Roblox API usage check
 tools/typecheck/               strict Luau type check (official analyzer + Roblox definitions)
 tools/mapgen/                  map geometry generator (traces a reference map) and the house sigils

@@ -7,6 +7,10 @@
 	replication layer flushes the journal on a fixed interval (or immediately after a player
 	command) and sends only the changed entities. This keeps simulation code independent of
 	networking, and lets future systems (wars, schemes) replicate without new plumbing.
+
+	Armies are the one collection whose entities disappear (merged, disbanded, deserted). A removal
+	is recorded separately in `removedArmies` (and cancels any pending update of that army) because
+	a delta can only carry views of entities that still exist.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -20,6 +24,8 @@ export type Changes = {
 	provinces: { [string]: boolean },
 	relations: { [string]: boolean },
 	characters: { [string]: boolean },
+	armies: { [string]: boolean },
+	removedArmies: { [string]: boolean },
 	events: { GameTypes.GameEvent },
 }
 
@@ -32,6 +38,8 @@ local function empty(): Changes
 		provinces = {},
 		relations = {},
 		characters = {},
+		armies = {},
+		removedArmies = {},
 		events = {},
 	}
 end
@@ -74,6 +82,16 @@ function ChangeJournal.markCharacter(self: ChangeJournal, characterId: string)
 	self.changes.characters[characterId] = true
 end
 
+function ChangeJournal.markArmy(self: ChangeJournal, armyId: string)
+	self.changes.armies[armyId] = true
+end
+
+-- The army no longer exists; clients must delete it.
+function ChangeJournal.markArmyRemoved(self: ChangeJournal, armyId: string)
+	self.changes.armies[armyId] = nil
+	self.changes.removedArmies[armyId] = true
+end
+
 function ChangeJournal.pushEvent(self: ChangeJournal, event: GameTypes.GameEvent)
 	table.insert(self.changes.events, event)
 end
@@ -87,6 +105,8 @@ function ChangeJournal.hasChanges(self: ChangeJournal): boolean
 		or next(c.provinces) ~= nil
 		or next(c.relations) ~= nil
 		or next(c.characters) ~= nil
+		or next(c.armies) ~= nil
+		or next(c.removedArmies) ~= nil
 		or #c.events > 0
 end
 

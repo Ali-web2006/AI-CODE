@@ -15,9 +15,11 @@ src/
 │   │   ├── World/                    Provinces, terrain, holdings, regions, MapData, SigilArt
 │   │   ├── Houses/                   House identities and heraldry
 │   │   ├── Characters/               Traits, cultures, faiths
+│   │   ├── Military/                 The unit table: classes, counters, units, house compositions
 │   │   ├── Bookmarks/                Scenarios: start date, rulers, ownership, relations, characters
 │   │   └── Content.luau              Single entry point: indexed, frozen content
-│   ├── Rules/                        Pure formulas (economy, diplomacy, traits, character facts)
+│   ├── Rules/                        Pure formulas (economy, diplomacy, traits, character facts,
+│   │                                 military pools and armies, movement routes)
 │   ├── Net/Protocol.luau             Remote names, command names, result codes
 │   ├── Text/EventText.luau           Player-facing narrative text for events
 │   └── Util/                         CalendarDate, DeterministicRng, Signal, TableUtil
@@ -46,7 +48,8 @@ Dependency rules (enforced by structure, checked in review):
 
 The suggested service list in the brief (`HouseService`, `ProvinceService`, …) was deliberately
 not created as empty modules. Their responsibilities live in focused domain modules (`Economy`,
-`Diplomacy`, `CampaignState`, `AIDirector`), and Roblox-specific concerns live in three adapters.
+`Diplomacy`, `Military`, `CampaignState`, `AIDirector`), and Roblox-specific concerns live in three
+adapters.
 
 ## 2. The authoritative flow
 
@@ -60,7 +63,7 @@ Player input (button)
   -> CommandProcessor.submit         command lookup, schema, actor can act,
                                      command.validate (ownership, cost, cooldown, limits),
                                      command.execute in pcall, post-condition invariants
-  -> Economy / Diplomacy             domain operation mutates CampaignState exactly once
+  -> Economy / Diplomacy / Military  domain operation mutates CampaignState exactly once
   -> ChangeJournal                   marks dirty entities and records structured events
   -> CampaignHost.collectReplication per-player, sequenced deltas (RemoteEvent "StateDelta")
   -> StateController / ReplicaStore  merge; gap or resync -> fetch full snapshot
@@ -92,15 +95,34 @@ content and only mutable fields in state.
 |---|---|
 | `clock.date`, `clock.lastProcessedMonthIndex` | `Simulation.advanceDay` / `processMonth` |
 | `clock.speed`, `clock.paused` | `Simulation.setSpeed/setPaused` via host policy |
-| `houses[id].treasury` | `Economy.processMonth`, `Economy.develop`, `Diplomacy.applyImproveRelations` |
+| `houses[id].treasury` | `Economy.processMonth` (army upkeep included), `Economy.develop`, `Diplomacy.applyImproveRelations` |
 | `houses[id].ledger` | `Economy.processMonth` |
 | `provinces[id].ownerHouseId` | bookmark (Phase 5 adds conquest) |
 | `provinces[id].occupierHouseId` | reserved for Phase 5 (occupied provinces yield nothing to the owner) |
 | `provinces[id].development` | `Economy.develop` |
+| `provinces[id].levies`, `provinces[id].garrisonTroops` | `Military`: raising empties a levy pool, disbanding refills it, `Military.processMonth` replenishes both |
+| `armies[id]`, `nextArmySerial` | `Military` commands and `Military.processDay` (movement, merging on arrival, supply, attrition, desertion) |
 | `relations[key].score` | `Diplomacy.applyImproveRelations`, monthly drift |
 | `rng.state` | every random decision (`DeterministicRng`) |
 
 `StateInvariants.check` verifies all of the above. It runs on every loaded save and in the tests.
+
+### Armies
+
+An `ArmyState` (`GameTypes`) is keyed `army_<serial>`; the serial comes from `nextArmySerial` in
+state, so ids are deterministic and never reused. It holds its house, origin (which names it),
+commander, location, units (`unitId -> men`), morale, supply, flags and its movement:
+
+* `route` is the list of remaining stops; `route[1]` is the next province.
+* `legStartDay` and `legEndDay` are `CalendarDate.toDayNumber` values of the current leg. Both set
+  means in transit from `locationId` to `route[1]`; both nil with a route means waiting in port
+  for free ships; both nil with an empty route means idle.
+
+Nothing changes while an army marches, so it is marked dirty only when a leg starts or ends, when
+it merges, or when supply, morale or men change (every `SupplyTickDays`). Clients interpolate the
+position from the leg days and `clock.dayNumber`. Ships are derived, not stored: a house's fleet
+is the sum of `MilitaryRules.ships` over the provinces it holds, and ships in use are those
+carrying its armies on sea legs. Commanders are characters of the house, at most one army each.
 
 ### Relations are symmetric
 
@@ -116,9 +138,11 @@ deliberately not stored here.
 * One `RunService.Heartbeat` connection drives the whole campaign. There are no per-entity loops.
 * A server hitch can produce at most `MaxDaysPerStep` (10) days. Any backlog beyond that is
   discarded, so there is no catch-up spiral.
-* `Simulation.advanceDay` advances the `CalendarDate` (365-day calendar, no leap years), runs
-  daily systems (an empty extension point in Phase 1) and, when the month changes, runs the
-  monthly systems for the month that ended: Economy, Diplomacy drift, AI.
+* `Simulation.advanceDay` advances the `CalendarDate` (365-day calendar, no leap years), runs the
+  daily systems (`Military.processDay`: arrivals, departures, gathering, and every 5 days supply,
+  morale and attrition) and, when the month changes, runs the monthly systems for the month that
+  ended: Economy (army upkeep included), Military (levy and garrison refill), Diplomacy drift, AI.
+  On the first day of a month the daily systems run before the monthly ones.
 * The monthly guard: `lastProcessedMonthIndex` increases exactly once per month. Processing a month
   at or before it is refused and logged. Scenario D verifies this under constant speed changes,
   pauses and hitches.
@@ -148,13 +172,33 @@ The server never calls `InvokeClient`. Commands (see `Protocol.Commands`) and th
 | `SetSpeed` | `{ speed }` (1..3) | host |
 | `DevelopProvince` | `{ provinceId }` | leads the owning house (house taken from the session) |
 | `ImproveRelations` | `{ targetHouseId }` | leads a house |
+| `RaiseArmy` | `{ provinceId }` | leads the house that holds the province; enough levies; army limit |
+| `RaiseAllLevies` | `{ provinceId }` (the rally province) | leads the house that holds it; army limit |
+| `MoveArmy` | `{ armyId, provinceId }` | leads the army's house; a route exists (and enough ships for a voyage) |
+| `StopArmy` | `{ armyId }` | leads the army's house; the army has orders |
+| `SplitArmy` | `{ armyId }` | leads the army's house; idle; each half at least 100 men; army limit |
+| `MergeArmies` | `{ armyId, intoArmyId }` | leads both armies' house; both idle in the same province |
+| `DisbandArmy` | `{ armyId }` | leads the army's house |
 | `GetSaveInfo` | none | connected; 3 s cooldown |
 | `SaveCampaign`, `LoadCampaign` | none | host; 10 s cooldown |
 | `DebugAdvanceMonth` | none | host, development environment only |
 
+Army commands return the result codes `NotEnoughTroops`, `NoPath`, `NotEnoughShips` and
+`LimitReached` besides the common ones.
+
 Deltas carry only the entities marked dirty since the last flush, built per viewer by `Snapshot`.
 In Phase 1 all campaign state is public; events are filtered by audience. Each player has their
-own sequence number. A gap, or a `resync` marker (sent after a load), makes the client fetch a
+own sequence number. Armies are the one collection whose entities disappear (merged, disbanded,
+deserted): a delta lists them in `campaign.removedArmies` (sorted ids) and `ReplicaStore` deletes
+them. Views added for the military:
+
+* `campaign.armies[id]`: `{ id, houseId, originId, commanderId?, locationId, units, troops, morale,
+  supply, route, legStartDay?, legEndDay?, gather, starving, strength, upkeep, speed }`
+* province views add `levies, leviesMax, garrisonTroops, garrisonMax, ships` (`garrison` remains
+  the gold upkeep of the garrison)
+* house views add `budget.armyUpkeep` and `military = { raised, levies, leviesMax, garrisons,
+  garrisonsMax, total, ships, shipsInUse, armies }`
+* the clock view adds `dayNumber` A gap, or a `resync` marker (sent after a load), makes the client fetch a
 full snapshot. Flushes are batched every `ReplicationInterval` (0.1 s) and forced right after each
 player request.
 
@@ -177,7 +221,9 @@ Implemented in `CampaignHost.handleRequest`, `PayloadSchema`, `RateLimiter` and 
   every command.
 * Rejections are logged through `Diagnostics.throttled`, so spam cannot flood the output.
 
-Scenario H covers this, including 2,000 fuzzed requests that must never throw or create gold.
+Scenario H covers this, including 2,000 fuzzed requests that must never throw or create gold, and
+1,500 fuzzed army orders over five months of play that must keep every invariant and every gold
+change in the ledger.
 
 ## 7. Persistence
 
@@ -185,27 +231,35 @@ Phase 1 persists one campaign slot per host player (`host_<userId>`):
 * In development (Studio), saves go to the DataStore `IronThrone_DEV_Campaigns_v1`.
 * In production, they go to `IronThrone_Campaigns_v1`.
 
-Save record (schema version 1, `CampaignSerializer`):
+Save record (schema version 2, `CampaignSerializer`):
 
 ```
-{ format = "IronThroneCampaign", schemaVersion = 1, savedAt, revision, writerSessionId,
+{ format = "IronThroneCampaign", schemaVersion = 2, savedAt, revision, writerSessionId,
   summary = { campaignId, bookmarkId, date, hostHouseId },
-  campaign = { campaignId, bookmarkId, seed, rngState,
+  campaign = { campaignId, bookmarkId, seed, rngState, nextArmySerial,
                clock = { date, speed, lastProcessedMonthIndex },
                houses = { [id] = { treasury, rulerId, extinct, ledger, aiNextEvaluationMonth } },
-               provinces = { [id] = { ownerHouseId, occupierHouseId?, development } },
+               provinces = { [id] = { ownerHouseId, occupierHouseId?, development, levies,
+                                      garrisonTroops } },
                characters = { [id] = { full character record } },
-               relations = { [key] = { score, baseline, cooldowns } } } }
+               relations = { [key] = { score, baseline, cooldowns } },
+               armies = { [id] = { houseId, originId, commanderId?, locationId, units, morale,
+                                   supply, route, legStartDay?, legEndDay?, gather, starving } } } }
 ```
 
 * **Explicit fields:** every field is written and read explicitly, and type-checked on load.
   `StateInvariants` must pass before a loaded state replaces the live campaign; otherwise the live
   campaign is untouched.
 * **Migrations:** `MIGRATIONS[n]` upgrades schema `n` to `n + 1`. A save from a newer schema is
-  refused.
+  refused. `MIGRATIONS[1]` adds an empty `armies` set and `nextArmySerial = 1`; it touches only
+  top-level keys, because the campaign table is not yet validated. Schema 1 provinces have no
+  levy or garrison pools: they load full, sized to the saved development, without a warning. From
+  schema 2 on the pools are required.
 * **Content drift:**
   * Entities added to content after a save are initialised from the bookmark, with a warning.
   * Entities that no longer exist make the load fail.
+  * Armies are not content: the saved set replaces the bookmark's (empty) one, and an army that
+    names an unknown house, province, unit or character makes the load fail.
 * **Concurrency:** every write uses `UpdateAsync` with an optimistic `revision` check inside the
   transform. A server that last saw revision 3 cannot overwrite revision 4; it gets `SaveConflict`.
 * **Transient failures:** bounded retries with 1, 2 and 4 second backoff. A request budget check
@@ -234,7 +288,8 @@ Save record (schema version 1, `CampaignSerializer`):
   * envoys, scored by proximity and how bad relations are
 * Anything the house cannot afford after its cash reserve is discarded. The best candidate is
   submitted through `CommandProcessor`.
-* Adding behaviours means adding candidate generators.
+* Adding behaviours means adding candidate generators. The AI does not raise or move armies yet;
+  a military generator would pre-validate with the same `Military.check*` functions.
 
 Determinism: the same seed reproduces the same campaign (Scenario G compares two 5-year runs
 field by field).
@@ -243,7 +298,9 @@ field by field).
 
 * `NetClient`: transport. Never throws; failures become results.
 * `StateController` + `ReplicaStore`: snapshot + sequenced deltas. `ReplicaStore` is pure and
-  unit-tested.
+  unit-tested. It also applies army removals (`removedArmies`), always holds a `campaign.armies`
+  table once a snapshot arrived, and offers `army(id)`, `armiesOf(houseId)` and
+  `armiesIn(provinceId)` (sorted by id).
 * `ActionController`: sends commands with a per-action busy guard, and reports results.
 * `UIController`: three ScreenGuis:
   * backdrop
@@ -286,10 +343,10 @@ Each long-term feature, and where it attaches without replacing the foundation:
 |---|---|
 | More houses, provinces, bookmarks, maps | Data files only; `ContentValidator` checks them; saves initialise added content from the bookmark |
 | Characters, births, deaths, marriages, inheritance | `CampaignState.characters` is already state-owned and saved in full; add daily/monthly systems and commands; succession rules as data |
-| Titles, vassals, claims, governments | New `titles` collection in state + `TitleDefinitions`; houses keep identity; schema migration 1→2 |
+| Titles, vassals, claims, governments | New `titles` collection in state + `TitleDefinitions`; houses keep identity; schema migration 2→3 |
 | Treaties (alliances, NAPs, marriages, war) | Attach to the symmetric `RelationState` record per pair; commands follow the `check*`/`apply*` pattern |
 | Character opinions, traits, secrets, schemes | Directional opinion store separate from house relations; schemes as state entities advanced by a daily system |
-| Armies, war, sieges, peace | `occupierHouseId` already separates occupation from ownership; adjacency carries connection kinds for movement; daily systems for movement and sieges |
+| War, battles, sieges, peace | Armies, levies, garrisons, movement and supply exist (`Military`); unit stats already carry counters, siege damage and terrain, region and situation multipliers; `occupierHouseId` separates occupation from ownership; battles and sieges become further daily systems after `Military.processDay`; military AI is a new candidate generator |
 | Buildings, trade, deeper economy | `EconomyRules.computeHouseBudget` takes per-province lines; add modifiers there |
 | Smarter AI | Add candidate generators to `AIDirector`; evaluation budget already bounded |
 | Hidden information | `Snapshot` builds every view per viewer; filter there |

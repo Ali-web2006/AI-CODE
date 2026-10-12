@@ -26,8 +26,9 @@ Design pillars:
 3. Start the clock. Every month, the server settles income and expenses.
 4. Invest gold to develop provinces, trading money now for income later.
 5. Send envoys to improve relations with neighbours and rivals.
-6. Watch AI houses develop their lands and court each other.
-7. Save the campaign and load it later.
+6. Raise your levies into armies and march them across the realm, paying their upkeep.
+7. Watch AI houses develop their lands and court each other.
+8. Save the campaign and load it later.
 
 The first ten minutes teach the loop: gold comes from developed land, development costs gold,
 and relations cost gold and fade without upkeep.
@@ -44,7 +45,8 @@ and relations cost gold and fade without upkeep.
   | 2 (Fast) | 0.15 | ~4.5 |
   | 3 (Very fast) | 0.05 | ~1.5 |
 
-* Economy, relation drift and AI decisions are processed once at the end of each month.
+* Economy, levy refills, relation drift and AI decisions are processed once at the end of each
+  month. Armies move every day; their supply and morale change every 5 days.
 
 ## Economy (formulas in `Shared/Rules/EconomyRules.luau`, constants in `GameConfig.Economy`)
 
@@ -54,6 +56,7 @@ House tax income  = Σ income of owned, unoccupied provinces
                     × (1 + 0.015 × ruler stewardship + trait tax bonuses)
 Monthly expenses  = court upkeep × (1 + trait court modifiers)
                     + Σ holding garrison upkeep + 0.08 × development, per province
+                    + army upkeep (see Military)
 Net               = tax income − expenses, applied to the treasury once per month (rounded to 0.01)
 Development cost  = round(20 × 1.30^(development − 1) × terrain cost multiplier), development 1..10
 ```
@@ -137,6 +140,178 @@ Each house plays differently:
 * Relations do not yet trigger treaties. They are the foundation for alliances, marriages and AI
   acceptance decisions in Phase 4.
 
+## Military (formulas in `Shared/Rules/MilitaryRules.luau` and `MovementRules.luau`, constants in `GameConfig.Military`, units in `Data/Military/UnitDefinitions.luau`)
+
+Every province musters **levies**, the men who can be raised into armies, and keeps a
+**garrison**, the men who hold its walls and never march. Ships come from coasts, islands and
+ports. Armies are raised from levies, march over the province graph and cost gold every month.
+There are no battles, sieges or wars yet, and the AI does not raise armies yet.
+
+### Levies, garrisons and ships
+
+```
+Levy maximum      = (1,200 + 1,700 × development) × holding levy × terrain manpower × region manpower,
+                    rounded to 50 men
+Garrison maximum  = holding garrison base + holding garrison per development × development,
+                    rounded to 10 men
+Ships             = round((terrain ships + holding ships per development) × development × region naval)
+Monthly refill    = ceil(8% of the levy maximum) levies and ceil(15% of the garrison maximum)
+                    garrison troops, never above the maximum; occupied provinces do not refill
+```
+
+A house's fleet is the sum of the ships of the provinces it holds (owned and not occupied). Every
+pool starts full. Raising empties a province's levy pool; it takes about a year to refill.
+
+| Terrain | Movement cost | Manpower | Ships per development | Supply drain |
+|---|---|---|---|---|
+| Plains | ×1.0 | ×1.0 | 0 | ×1.0 |
+| Farmlands | ×1.0 | ×1.25 | 0 | ×0.8 |
+| Forest | ×1.3 | ×0.85 | 0 | ×1.1 |
+| Hills | ×1.25 | ×0.9 | 0 | ×1.1 |
+| Mountains | ×1.7 | ×0.8 | 0 | ×1.5 |
+| Marsh | ×1.8 | ×0.6 | 0 | ×1.4 |
+| Coast | ×1.0 | ×1.0 | 2 | ×1.0 |
+| Island | ×1.0 | ×0.8 | 4 | ×1.2 |
+| Desert | ×1.4 | ×0.8 | 0 | ×1.6 |
+
+| Holding | Levies | Garrison base | Garrison per development | Ships per development |
+|---|---|---|---|---|
+| Castle | ×1.0 | 500 | 100 | 0 |
+| Fortress | ×0.5 | 1,500 | 300 | 0 |
+| City | ×0.6 | 1,200 | 250 | 0 |
+| Port | ×0.8 | 600 | 120 | 3 |
+
+| Region | Manpower | Naval |
+|---|---|---|
+| The North | ×1.35 | ×1 |
+| The Iron Islands | ×1.0 | ×10 |
+| The Riverlands | ×1.05 | ×1 |
+| The Vale of Arryn | ×1.65 | ×1 |
+| The Westerlands | ×1.3 | ×1.3 |
+| The Crownlands | ×0.9 | ×1.6 |
+| The Stormlands | ×1.15 | ×1 |
+| The Reach | ×1.4 | ×1.6 |
+| Dorne | ×1.15 | ×1 |
+
+Fortresses keep big garrisons but raise few levies; cities raise fewer levies (and pay more tax).
+The constants are calibrated to the lore of 297 AC. At the bookmark (full pools):
+
+| House | Levies | Garrisons | Total men | Ships |
+|---|---|---|---|---|
+| Tyrell | 57,100 | 6,730 | 63,830 | 67 |
+| Lannister | 36,700 | 5,620 | 42,320 | 39 |
+| Baratheon (Crownlands and Stormlands) | 33,350 | 6,910 | 40,260 | 67 |
+| Stark | 33,350 | 5,300 | 38,650 | 25 |
+| Arryn | 24,150 | 4,100 | 28,250 | 25 |
+| Martell | 20,850 | 4,900 | 25,750 | 15 |
+| Tully | 18,550 | 2,560 | 21,110 | 15 |
+| Greyjoy | 8,750 | 1,500 | 10,250 | 200 |
+| Frey | 8,400 | 900 | 9,300 | 0 |
+| Bolton | 7,650 | 800 | 8,450 | 0 |
+
+Winterfell (castle, plains, the North, development 4) musters (1,200 + 6,800) × 1.35 = 10,800
+levies and a garrison of 900.
+
+### Units
+
+Every levy is split among unit types by the raising house's **composition** (largest remainder,
+so the head count is exact). Each great house has one unique unit; the minor houses use the
+default composition.
+
+| Unit | Class | Attack | Defence | Morale | Speed | Upkeep | Siege | Special |
+|---|---|---|---|---|---|---|---|---|
+| Levy spearmen | spear | 8 | 10 | 0 | 1.0 | 1.0 | 0 | |
+| Archers | archer | 10 | 6 | 0 | 1.0 | 1.1 | 0 | |
+| Mounted knights | cavalry | 14 | 9 | 5 | 1.35 | 2.0 | 0 | |
+| Siege engines | siege | 2 | 3 | 0 | 0.85 | 3.0 | 10 | |
+| Northern clansmen | spear | 11 | 11 | 10 | 1.05 | 1.0 | 0 | Stark; forest ×1.3, hills ×1.15, the North ×1.25 |
+| Lannister heavy knights | cavalry | 22 | 14 | 10 | 1.15 | 3.0 | 0 | Lannister |
+| Ironborn reavers | spear | 15 | 8 | 15 | 1.1 | 1.2 | 0 | Greyjoy; coast and island ×1.2, raids and landings ×1.4 |
+| Reach cavalry | cavalry | 12 | 7 | 0 | 1.35 | 1.3 | 0 | Tyrell (cheap and numerous) |
+| Dornish spearmen | spear | 11 | 11 | 5 | 1.25 | 1.1 | 0 | Martell; desert ×1.35, mountains ×1.15 |
+| Knights of the Vale | cavalry | 24 | 18 | 15 | 1.15 | 3.5 | 0 | Arryn (elite) |
+| River archers | archer | 12 | 7 | 5 | 1.0 | 1.2 | 0 | Tully; river defence ×1.4 |
+| Stormland warhammers | spear | 18 | 9 | 10 | 0.95 | 1.8 | 0 | Baratheon (high damage) |
+
+Counters (damage multipliers for the battles that come with war): spears ×1.5 against cavalry, cavalry ×1.5
+against archers, archers ×1.5 against spears, siege engines ×4 against walls. The terrain,
+region and situation multipliers are also combat hooks for later phases.
+
+| House | Composition |
+|---|---|
+| Stark | 35% levy spearmen, 15% archers, 10% mounted knights, 40% northern clansmen |
+| Lannister | 40% levy spearmen, 20% archers, 10% mounted knights, 25% heavy knights, 5% siege engines |
+| Greyjoy | 25% levy spearmen, 15% archers, 60% ironborn reavers |
+| Tyrell | 35% levy spearmen, 20% archers, 40% Reach cavalry, 5% siege engines |
+| Martell | 20% levy spearmen, 25% archers, 10% mounted knights, 45% Dornish spearmen |
+| Arryn | 45% levy spearmen, 20% archers, 10% mounted knights, 25% Knights of the Vale |
+| Tully | 45% levy spearmen, 10% archers, 15% mounted knights, 30% river archers |
+| Baratheon | 35% levy spearmen, 20% archers, 15% mounted knights, 25% warhammers, 5% siege engines |
+| Frey, Bolton (default) | 60% levy spearmen, 25% archers, 15% mounted knights |
+
+### Armies
+
+```
+Upkeep (gold/month) = Σ (men / 1,000 × unit upkeep) × 1.5, charged in the monthly settlement
+Starting morale     = 60 + head-count-weighted unit morale bonus, at most 100; supply starts at 100
+Strength (display)  = Σ (men × (attack + defence) / 2) / 1,000 × (1 + 0.02 × (commander martial − 10))
+Army speed          = the speed of its slowest unit
+```
+
+* **Raise levies:** raises every available levy of a province the house holds (at least 100
+  men) into one army, named after the holding: "Army of Winterfell". A house keeps at most 12
+  armies.
+* **Call all levies:** every held province with at least 100 levies raises an army at once. The
+  armies raised elsewhere march to the rally province and merge into the army waiting there.
+  A province that cannot reach the rally (an island without enough ships) keeps its levies.
+* **Commanders:** the best available adult (16 or older) of the house who leads no other army:
+  highest martial, then the ruler, then by id. Children never lead; with nobody left an army is
+  leaderless. Eddard Stark (martial 13) leads the first northern army, Benjen (11) the second.
+* **Split** an idle army of at least 200 men: every unit is halved (the odd man stays), each half
+  keeps at least 100 men, morale and supply are copied, and the new half gets the next best
+  commander.
+* **Merge** two idle armies in the same province: units are added, morale and supply become
+  head-count-weighted averages, and the commander with the higher martial keeps command.
+* **Disband:** the men return to the levy pools of the house's held provinces, shared by each
+  pool's shortfall and never above its maximum. Men the pools cannot take back are lost. Nothing
+  is refunded.
+* **Upkeep:** the Winterfell levy costs 18.06 gold a month; Stark's whole levy about 56, against
+  a net income of 17.9. Raising everything bankrupts a house within months, so armies are raised
+  for a purpose and sent home afterwards.
+
+### Movement
+
+```
+Land leg (days) = ceil(max(1, distance / 12 × connection cost × destination terrain movement cost
+                                / army speed))
+Sea leg (days)  = ceil(max(1, distance / 30))     (terrain and unit speed do not matter at sea)
+Connection cost = road ×0.8, river ×1.0, mountain pass ×1.6, wilderness ×1.5
+Ships needed    = ceil(men / 100)
+```
+
+* Distances are between the provinces' map positions. Orders take the fastest route in days;
+  between equally fast routes, the alphabetically first one.
+* Sea lanes are used only when the house's whole fleet could carry the army; when the
+  destination can only be reached by sea, the order is refused ("not enough ships").
+* At sea the army needs that many **free** ships: the fleet minus the ships carrying the house's
+  other armies at sea. Otherwise it waits in port and sails as soon as enough ships are free.
+* Examples: Winterfell's levy reaches Moat Cailin in 28 days through White Harbor (13 days by
+  road, then 15 into the marsh of the Neck); Pyke's ironborn sail to Lannisport in 9 days; Stark's
+  25 ships cannot carry 10,800 men to Dragonstone.
+* A new order keeps the leg under way and replaces the rest of the route; **Stop** halts the army
+  at the end of the current leg (a waiting army simply stays).
+
+### Supply, morale and attrition (every 5 days)
+
+* An army's ground is its leg's destination while marching, otherwise the province it stands in.
+* On ground its house controls: supply +20 and morale +2 (up to 100).
+* At sea: no change.
+* Anywhere else it forages: supply −ceil(8 × terrain supply drain), so −8 on plains, −12 in the
+  mountains and −13 in the Dornish desert.
+* At zero supply the army starves: it loses ceil(3% of its men), spread over its units by head
+  count, and 5 morale; the first time, the house is alerted. An army reduced below 50 men
+  deserts entirely.
+
 ## AI rulers (`GameConfig.AI`)
 
 * AI houses are evaluated monthly. Each house's personality is a base value plus its ruler's
@@ -149,14 +324,15 @@ Each house plays differently:
 * **Envoys:** the AI courts houses below +25 relations, preferring neighbours and worse
   relations. It never courts blood feuds, meaning baselines below −50 (Martell–Lannister,
   Greyjoy–Baratheon).
+* The AI does not raise armies yet. Military AI arrives with war.
 * All randomness comes from the campaign's seeded RNG.
 
 Balance over a 30-year all-AI run (`tests/balance_report.luau`):
 * Every treasury stays positive.
 * AI houses develop actively for the first decade and make about 170 developments.
 * Relations move but stay plausible.
-* Late-game gold accumulates because Phase 1 has no armies or buildings to spend it on. These are
-  the intended gold sinks for Phases 5–6.
+* Late-game gold accumulates because the AI does not yet raise armies and there are no buildings.
+  Army upkeep, wars and buildings are the intended gold sinks.
 
 ## Characters (Phase 1 scope)
 
@@ -167,6 +343,7 @@ Balance over a 30-year all-AI run (`tests/balance_report.luau`):
 * Rulers matter now:
   * Stewardship raises tax income.
   * Diplomacy improves envoys.
+  * Martial decides who leads the house's armies and improves their strength rating.
   * Traits modify taxes, court costs, envoys and AI personality.
 * Births, deaths, marriages and succession arrive in Phase 2.
 

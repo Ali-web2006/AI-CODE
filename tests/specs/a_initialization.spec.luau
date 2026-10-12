@@ -16,6 +16,7 @@ return function(t)
 			traits = raw.traits,
 			cultures = raw.cultures,
 			faiths = raw.faiths,
+			military = raw.military,
 			map = fx.Content.map,
 		}
 		for key, value in overrides or {} do
@@ -134,6 +135,56 @@ return function(t)
 		expect.anyContains(report.errors, "character 'robb_stark': parent 'sansa_stark' is younger than 12")
 		expect.anyContains(report.errors, "character 'robb_stark': fatherId 'sansa_stark' is not male")
 		expect.anyContains(report.errors, "character 'jaime_lannister': spouse link to 'cersei_lannister' is not reciprocated")
+	end)
+
+	t.test("validator reports broken unit compositions and unit definitions", function()
+		local military = fx.TableUtil.deepCopy(fx.Content.raw.military)
+		military.compositions.stark.dragons = 0.1 -- no such unit
+		military.compositions.tully.river_archers = 0.4 -- the fractions now sum to 1.1
+		military.compositions.frey = { levy_spearmen = 0.5, knights_of_the_vale = 0.5 } -- Arryn's unique unit
+		military.counters.cavalry.dragon = 2 -- no such class
+		for _, unit in military.units do
+			if unit.id == "archers" then
+				unit.class = "musketeer"
+			elseif unit.id == "reach_cavalry" then
+				unit.houseId = "lannister" -- a second unique unit for Lannister
+			elseif unit.id == "northern_clansmen" then
+				unit.terrain.tundra = 1.2 -- no such terrain
+			elseif unit.id == "river_archers" then
+				unit.situations.ambush = 1.2 -- not a known situation
+			elseif unit.id == "knights_of_the_vale" then
+				unit.morale = 40 -- above the bonus cap of 30
+			end
+		end
+		local report = ContentValidator.validate(rawInput({ military = military }), bookmark, fx.GameConfig)
+		expect.anyContains(report.errors, "military composition 'stark': unknown unit 'dragons'")
+		expect.anyContains(report.errors, "military composition 'tully': fractions sum to 1.1, not 1")
+		expect.anyContains(report.errors, "military composition 'frey': unit 'knights_of_the_vale' is unique to house 'arryn'")
+		expect.anyContains(report.errors, "military counters 'cavalry': unknown target class 'dragon'")
+		expect.anyContains(report.errors, "unit 'archers': unknown class 'musketeer'")
+		expect.anyContains(report.errors, "house 'lannister': more than one unique unit (lannister_heavy_knights, reach_cavalry)")
+		expect.anyContains(report.errors, "unit 'northern_clansmen': terrain references unknown 'tundra'")
+		expect.anyContains(report.errors, "unit 'river_archers': situations references unknown 'ambush'")
+		expect.anyContains(report.errors, "unit 'knights_of_the_vale': morale must be a number in [0, 30]")
+	end)
+
+	t.test("validator reports invalid military fields on terrains, holdings and regions", function()
+		local terrains = fx.TableUtil.deepCopy(fx.Content.raw.terrains)
+		local holdingKinds = fx.TableUtil.deepCopy(fx.Content.raw.holdingKinds)
+		local regions = fx.TableUtil.deepCopy(fx.Content.raw.regions)
+		terrains[1].movementCost = 0
+		holdingKinds[1].garrisonBase = 0 / 0
+		terrains[2].shipsPerDevelopment = -1
+		regions[1].naval = 0
+		local report = ContentValidator.validate(
+			rawInput({ terrains = terrains, holdingKinds = holdingKinds, regions = regions }),
+			bookmark,
+			fx.GameConfig
+		)
+		expect.anyContains(report.errors, `terrain '{terrains[1].id}': movementCost must be a positive number`)
+		expect.anyContains(report.errors, `terrain '{terrains[2].id}': shipsPerDevelopment must be a non-negative number`)
+		expect.anyContains(report.errors, `holding kind '{holdingKinds[1].id}': garrisonBase must be a positive number`)
+		expect.anyContains(report.errors, `region '{regions[1].id}': naval must be a positive number`)
 	end)
 
 	t.test("campaign host refuses to start with invalid content", function()

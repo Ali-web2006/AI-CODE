@@ -5,6 +5,8 @@
 	It works on raw definition lists (not lookup maps) so duplicate ids are detected. Every problem
 	is reported with the entity and field at fault, e.g.
 	  "province 'riverrun': adjacency to 'seagard' is not symmetric".
+	It also checks the unit table (Data/Military/UnitDefinitions) and the military fields of
+	terrains, holding kinds and regions, which feed the levy, garrison, ship and march formulas.
 	The server refuses to start a campaign while errors exist; warnings are logged only.
 ]]
 
@@ -22,6 +24,7 @@ export type ContentInput = {
 	traits: { GameTypes.TraitDefinition },
 	cultures: { GameTypes.CultureDefinition },
 	faiths: { GameTypes.NamedDefinition },
+	military: GameTypes.MilitaryDefinitions,
 	map: GameTypes.MapDefinition,
 }
 
@@ -36,6 +39,12 @@ local CONNECTION_KINDS = { road = true, river = true, sea = true, pass = true, w
 local HERALDRY_DIVISIONS = { plain = true, chief = true, pale = true, fess = true, quarterly = true, bordure = true }
 local TRAIT_MODIFIERS = { taxIncome = true, courtUpkeep = true, relationsGainSent = true, relationsGainReceived = true }
 local AI_WEIGHTS = { investment = true, diplomacy = true, reserveMonths = true, actChance = true }
+local UNIT_SITUATIONS: { [string]: boolean } = { raid = true, landing = true, riverDefense = true }
+-- Pseudo-class a counter may target besides the unit classes (siege damage against walls).
+local WALLS_CLASS = "walls"
+local MAX_UNIT_MORALE_BONUS = 30
+-- Composition fractions must sum to 1 within this tolerance.
+local FRACTION_TOLERANCE = 1e-6
 local MIN_PARENT_AGE = 12
 
 local ContentValidator = {}
@@ -76,6 +85,47 @@ local function indexList(report: Report, kind: string, list: { any }, maxIdLengt
 		end
 	end
 	return index
+end
+
+-- Reports every listed field that is not a finite number above zero (`positive`) or at least zero
+-- (`nonNegative`).
+local function validateNumbers(report: Report, where: string, definition: { [string]: any }, positive: { string }, nonNegative: { string })
+	for _, field in positive do
+		local value = definition[field]
+		if not isFiniteNumber(value) or value <= 0 then
+			table.insert(report.errors, `{where}: {field} must be a positive number`)
+		end
+	end
+	for _, field in nonNegative do
+		local value = definition[field]
+		if not isFiniteNumber(value) or value < 0 then
+			table.insert(report.errors, `{where}: {field} must be a non-negative number`)
+		end
+	end
+end
+
+local function validateTerrains(report: Report, idx: { [string]: { [string]: any } })
+	for id, terrain in idx.terrains do
+		validateNumbers(report, `terrain '{id}'`, terrain, { "movementCost", "manpower", "supplyDrain" }, { "shipsPerDevelopment" })
+	end
+end
+
+local function validateHoldingKinds(report: Report, idx: { [string]: { [string]: any } })
+	for id, holding in idx.holdingKinds do
+		validateNumbers(
+			report,
+			`holding kind '{id}'`,
+			holding,
+			{ "levyMultiplier", "garrisonBase", "garrisonPerDevelopment" },
+			{ "shipsPerDevelopment" }
+		)
+	end
+end
+
+local function validateRegions(report: Report, idx: { [string]: { [string]: any } })
+	for id, region in idx.regions do
+		validateNumbers(report, `region '{id}'`, region, { "manpower", "naval" }, {})
+	end
 end
 
 local function validateProvinces(report: Report, input: ContentInput, idx: { [string]: { [string]: any } })
@@ -205,6 +255,146 @@ local function validateTraits(report: Report, idx: { [string]: { [string]: any }
 			end
 		end
 	end
+end
+
+-- Checks an optional { [key] = multiplier } table of a unit: known keys, positive multipliers.
+local function validateUnitModifiers(report: Report, where: string, field: string, modifiers: any, known: { [string]: any })
+	if modifiers == nil then
+		return
+	end
+	if type(modifiers) ~= "table" then
+		table.insert(report.errors, `{where}: {field} must map ids to multipliers`)
+		return
+	end
+	for key, multiplier in modifiers do
+		if not known[key] then
+			table.insert(report.errors, `{where}: {field} references unknown '{tostring(key)}'`)
+		elseif not isFiniteNumber(multiplier) or multiplier <= 0 then
+			table.insert(report.errors, `{where}: {field} multiplier for '{key}' must be a positive number`)
+		end
+	end
+end
+
+--[[
+	Checks one levy composition: known units, fractions in (0, 1] summing to 1, and no unique unit
+	of another house. houseId is nil for the default composition, which may hold no unique unit.
+]]
+local function validateComposition(report: Report, where: string, composition: any, houseId: string?, units: { [string]: any })
+	if type(composition) ~= "table" or next(composition) == nil then
+		table.insert(report.errors, `{where}: must map unit ids to fractions`)
+		return
+	end
+	local sum = 0
+	for unitId, fraction in composition do
+		local unit = units[unitId]
+		if not unit then
+			table.insert(report.errors, `{where}: unknown unit '{tostring(unitId)}'`)
+		elseif unit.houseId ~= nil and unit.houseId ~= houseId then
+			table.insert(report.errors, `{where}: unit '{unitId}' is unique to house '{tostring(unit.houseId)}'`)
+		end
+		if not isFiniteNumber(fraction) or fraction <= 0 or fraction > 1 then
+			table.insert(report.errors, `{where}: fraction of '{tostring(unitId)}' must be in (0, 1]`)
+		else
+			sum += fraction
+		end
+	end
+	if math.abs(sum - 1) > FRACTION_TOLERANCE then
+		table.insert(report.errors, `{where}: fractions sum to {string.format("%.4g", sum)}, not 1`)
+	end
+end
+
+-- The unit table: classes, units, counters, house compositions and the default composition.
+local function validateMilitary(report: Report, input: ContentInput, idx: { [string]: { [string]: any } }, maxIdLength: number)
+	local military: any = input.military
+	if type(military) ~= "table" then
+		table.insert(report.errors, "military: unit definitions are missing")
+		return
+	end
+
+	local classes: { [string]: boolean } = {}
+	if type(military.classes) ~= "table" or #military.classes == 0 then
+		table.insert(report.errors, "military: classes must be a non-empty list")
+	else
+		for _, class in military.classes do
+			if type(class) ~= "string" or class == "" or class == WALLS_CLASS then
+				table.insert(report.errors, `military: invalid class '{tostring(class)}'`)
+			elseif classes[class] then
+				table.insert(report.errors, `military: duplicate class '{class}'`)
+			else
+				classes[class] = true
+			end
+		end
+	end
+
+	local units = indexList(report, "unit", military.units, maxIdLength)
+	local uniqueUnits: { [string]: { string } } = {}
+	for id, unit in units do
+		local where = `unit '{id}'`
+		for _, field in { "name", "description" } do
+			if type(unit[field]) ~= "string" or unit[field] == "" then
+				table.insert(report.errors, `{where}: missing {field}`)
+			end
+		end
+		if not classes[unit.class] then
+			table.insert(report.errors, `{where}: unknown class '{tostring(unit.class)}'`)
+		end
+		validateNumbers(report, where, unit, { "attack", "defense", "speed", "upkeep" }, { "siege" })
+		if not isFiniteNumber(unit.morale) or unit.morale < 0 or unit.morale > MAX_UNIT_MORALE_BONUS then
+			table.insert(report.errors, `{where}: morale must be a number in [0, {MAX_UNIT_MORALE_BONUS}]`)
+		end
+		validateUnitModifiers(report, where, "terrain", unit.terrain, idx.terrains)
+		validateUnitModifiers(report, where, "regions", unit.regions, idx.regions)
+		validateUnitModifiers(report, where, "situations", unit.situations, UNIT_SITUATIONS)
+		if unit.houseId ~= nil then
+			if not idx.houses[unit.houseId] then
+				table.insert(report.errors, `{where}: unknown house '{tostring(unit.houseId)}'`)
+			else
+				uniqueUnits[unit.houseId] = uniqueUnits[unit.houseId] or {}
+				table.insert(uniqueUnits[unit.houseId], id)
+			end
+		end
+	end
+	for houseId, unitIds in uniqueUnits do
+		if #unitIds > 1 then
+			table.sort(unitIds)
+			table.insert(report.errors, `house '{houseId}': more than one unique unit ({table.concat(unitIds, ", ")})`)
+		end
+	end
+
+	if type(military.counters) ~= "table" then
+		table.insert(report.errors, "military: counters must be a table")
+	else
+		for attacker, targets in military.counters do
+			local where = `military counters '{tostring(attacker)}'`
+			if not classes[attacker] then
+				table.insert(report.errors, `{where}: unknown attacker class`)
+			end
+			if type(targets) ~= "table" then
+				table.insert(report.errors, `{where}: must map classes to multipliers`)
+			else
+				for target, multiplier in targets do
+					if not classes[target] and target ~= WALLS_CLASS then
+						table.insert(report.errors, `{where}: unknown target class '{tostring(target)}'`)
+					elseif not isFiniteNumber(multiplier) or multiplier <= 0 then
+						table.insert(report.errors, `{where}: multiplier against '{target}' must be a positive number`)
+					end
+				end
+			end
+		end
+	end
+
+	if type(military.compositions) ~= "table" then
+		table.insert(report.errors, "military: compositions must be a table")
+	else
+		for houseId, composition in military.compositions do
+			local where = `military composition '{tostring(houseId)}'`
+			if not idx.houses[houseId] then
+				table.insert(report.errors, `{where}: unknown house`)
+			end
+			validateComposition(report, where, composition, houseId, units)
+		end
+	end
+	validateComposition(report, "military default composition", military.defaultComposition, nil, units)
 end
 
 local function validateCharacters(
@@ -402,9 +592,13 @@ function ContentValidator.validate(input: ContentInput, bookmark: GameTypes.Book
 		cultures = indexList(report, "culture", input.cultures, maxIdLength),
 		faiths = indexList(report, "faith", input.faiths, maxIdLength),
 	}
+	validateTerrains(report, idx)
+	validateHoldingKinds(report, idx)
+	validateRegions(report, idx)
 	validateProvinces(report, input, idx)
 	validateHouses(report, idx)
 	validateTraits(report, idx)
+	validateMilitary(report, input, idx, maxIdLength)
 	validateBookmark(report, bookmark, idx, config)
 	table.sort(report.errors)
 	table.sort(report.warnings)

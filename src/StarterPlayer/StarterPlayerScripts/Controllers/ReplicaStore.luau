@@ -14,6 +14,10 @@
 
 	The store never computes game outcomes: every number in it came from the server. It is pure
 	Luau (no Roblox services) so tests can drive it with the real server pipeline.
+
+	Armies are the one collection whose entities disappear: a delta lists them in `removedArmies`,
+	and the store deletes them and reports their ids in ChangeSet.armies like any other change.
+	campaign.armies always exists once a snapshot has been applied (empty when the server sent none).
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -29,6 +33,8 @@ export type ChangeSet = {
 	provinces: { [string]: boolean },
 	relations: { [string]: boolean },
 	characters: { [string]: boolean },
+	-- Armies added, changed or removed (a removed id is no longer in campaign.armies).
+	armies: { [string]: boolean },
 	events: { any },
 }
 
@@ -55,6 +61,7 @@ local function emptyChangeSet(full: boolean): ChangeSet
 		provinces = {},
 		relations = {},
 		characters = {},
+		armies = {},
 		events = {},
 	}
 end
@@ -73,6 +80,9 @@ end
 function ReplicaStore.applyFull(self: ReplicaStore, payload: { [string]: any })
 	self.seq = payload.seq or 0
 	self.campaign = payload.campaign or {}
+	if type(self.campaign.armies) ~= "table" then
+		self.campaign.armies = {}
+	end
 	self.session = payload.session or {}
 	self.ready = true
 	self.changed:Fire(emptyChangeSet(true))
@@ -130,6 +140,12 @@ function ReplicaStore.applyDelta(self: ReplicaStore, payload: { [string]: any })
 		self.campaign.provinces = mergeEntities(self.campaign.provinces, campaign.provinces, changes.provinces)
 		self.campaign.relations = mergeEntities(self.campaign.relations, campaign.relations, changes.relations)
 		self.campaign.characters = mergeEntities(self.campaign.characters, campaign.characters, changes.characters)
+		local armies = mergeEntities(self.campaign.armies, campaign.armies, changes.armies)
+		for _, armyId in campaign.removedArmies or {} do
+			armies[armyId] = nil
+			changes.armies[armyId] = true
+		end
+		self.campaign.armies = armies
 	end
 	if payload.session then
 		self.session = payload.session
@@ -159,6 +175,36 @@ end
 
 function ReplicaStore.relation(self: ReplicaStore, houseA: string, houseB: string): { [string]: any }?
 	return self.campaign.relations and self.campaign.relations[DiplomacyRules.relationKey(houseA, houseB)]
+end
+
+function ReplicaStore.army(self: ReplicaStore, armyId: string): { [string]: any }?
+	return self.campaign.armies and self.campaign.armies[armyId]
+end
+
+local function sortedArmies(self: ReplicaStore, field: string, value: string): { { [string]: any } }
+	local armies: { [string]: any } = self.campaign.armies or {}
+	local ids: { string } = {}
+	for armyId, army in armies do
+		if army[field] == value then
+			table.insert(ids, armyId)
+		end
+	end
+	table.sort(ids)
+	local list = {}
+	for _, armyId in ids do
+		table.insert(list, armies[armyId])
+	end
+	return list
+end
+
+-- Armies of a house, sorted by id.
+function ReplicaStore.armiesOf(self: ReplicaStore, houseId: string): { { [string]: any } }
+	return sortedArmies(self, "houseId", houseId)
+end
+
+-- Armies located in a province (an army on the road is in the province it left), sorted by id.
+function ReplicaStore.armiesIn(self: ReplicaStore, provinceId: string): { { [string]: any } }
+	return sortedArmies(self, "locationId", provinceId)
 end
 
 -- The player (or empty) controlling a house, from the replicated session roster.

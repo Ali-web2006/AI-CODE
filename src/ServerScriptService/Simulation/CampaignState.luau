@@ -9,6 +9,8 @@
 	  provinces[id].ownerHouseId / occupierHouseId  legal owner vs. military occupier
 	  provinces[id].development                     changed only by the DevelopProvince operation
 	  relations[key].score                          changed only by Diplomacy
+	  provinces[id].levies / garrisonTroops         changed only by Military (raise, disband, refill)
+	  armies[id], nextArmySerial                    changed only by Military
 
 	Nothing in here touches Roblox APIs, Instances or the network.
 ]]
@@ -19,6 +21,7 @@ local Content = require(ReplicatedStorage.Shared.Data.Content)
 local DeterministicRng = require(ReplicatedStorage.Shared.Util.DeterministicRng)
 local DiplomacyRules = require(ReplicatedStorage.Shared.Rules.DiplomacyRules)
 local GameTypes = require(ReplicatedStorage.Shared.Types.GameTypes)
+local MilitaryRules = require(ReplicatedStorage.Shared.Rules.MilitaryRules)
 local TableUtil = require(ReplicatedStorage.Shared.Util.TableUtil)
 
 type CampaignState = GameTypes.CampaignState
@@ -29,6 +32,8 @@ export type CreateOptions = {
 	schemaVersion: number,
 	clockConfig: { DefaultSpeed: number, StartPaused: boolean },
 	aiConfig: { EvaluationIntervalMonths: number },
+	-- Sizes the starting levy and garrison pools (every pool starts full).
+	militaryConfig: MilitaryRules.MilitaryConfig,
 }
 
 local CampaignState = {}
@@ -104,6 +109,8 @@ function CampaignState.createFromBookmark(bookmark: GameTypes.BookmarkDefinition
 			ownerHouseId = setup.ownerHouseId,
 			occupierHouseId = nil,
 			development = setup.development,
+			levies = MilitaryRules.levyMax(provinceId, setup.development, options.militaryConfig),
+			garrisonTroops = MilitaryRules.garrisonMax(provinceId, setup.development, options.militaryConfig),
 		}
 	end
 
@@ -142,6 +149,8 @@ function CampaignState.createFromBookmark(bookmark: GameTypes.BookmarkDefinition
 		provinces = provinces,
 		characters = characters,
 		relations = relations,
+		armies = {},
+		nextArmySerial = 1,
 	}
 end
 
@@ -201,6 +210,37 @@ end
 
 function CampaignState.currentMonthIndex(state: CampaignState): number
 	return CalendarDate.monthIndex(state.clock.date)
+end
+
+-- Day number of the current date (CalendarDate.toDayNumber): the clock of army movement.
+function CampaignState.todayNumber(state: CampaignState): number
+	return CalendarDate.toDayNumber(state.clock.date)
+end
+
+local function sortedArmies(state: CampaignState, include: (army: GameTypes.ArmyState) -> boolean): { GameTypes.ArmyState }
+	local armies = {}
+	for _, armyId in TableUtil.sortedKeys(state.armies) do
+		local army = state.armies[armyId]
+		if include(army) then
+			table.insert(armies, army)
+		end
+	end
+	return armies
+end
+
+-- Armies of a house, sorted by id.
+function CampaignState.armiesOf(state: CampaignState, houseId: string): { GameTypes.ArmyState }
+	return sortedArmies(state, function(army)
+		return army.houseId == houseId
+	end)
+end
+
+-- Armies (of any house) whose location is a province, sorted by id. An army in transit is
+-- located in the province it left until it arrives.
+function CampaignState.armiesIn(state: CampaignState, provinceId: string): { GameTypes.ArmyState }
+	return sortedArmies(state, function(army)
+		return army.locationId == provinceId
+	end)
 end
 
 return CampaignState

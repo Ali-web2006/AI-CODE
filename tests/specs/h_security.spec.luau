@@ -2,7 +2,7 @@
 -- handled safely; no request can create gold or touch unauthorized state.
 
 return function(t)
-	local fx, expect = t.fx, t.expect
+	local fx, expect, vr = t.fx, t.expect, t.vr
 	local Codes = fx.Protocol.ResultCodes
 	local Commands = fx.Protocol.Commands
 
@@ -43,6 +43,21 @@ return function(t)
 			{ Commands.SetPaused, { paused = "no" } },
 			{ Commands.SelectHouse, { houseId = "stark", extra = true } },
 			{ Commands.SaveCampaign, { force = true } },
+			-- Army commands: the acting house never comes from the payload, and ids are plain ids.
+			{ Commands.RaiseArmy, { provinceId = "winterfell", houseId = "lannister" } },
+			{ Commands.RaiseArmy, nil },
+			{ Commands.RaiseAllLevies, { provinceId = 5 } },
+			{ Commands.MoveArmy, { armyId = "army_1" } },
+			{ Commands.MoveArmy, { armyId = 1, provinceId = "moat_cailin" } },
+			{ Commands.MoveArmy, { armyId = "army-1", provinceId = "moat_cailin" } },
+			{ Commands.MoveArmy, { armyId = "army_1", provinceId = { "moat_cailin", "the_twins" } } },
+			{ Commands.StopArmy, { armyId = { "army_1" } } },
+			{ Commands.SplitArmy, { armyId = "army_1", troops = 500 } },
+			{ Commands.SplitArmy, { armyId = 0 / 0 } },
+			{ Commands.MergeArmies, { armyId = "army_1" } },
+			{ Commands.MergeArmies, { armyId = "army_1", intoArmyId = string.rep("a", 60) } },
+			{ Commands.DisbandArmy, { armyId = "" } },
+			{ Commands.DisbandArmy, { armyId = true } },
 		}
 		local big = {}
 		for i = 1, 100 do
@@ -119,17 +134,33 @@ return function(t)
 
 	t.test("fuzzed requests never throw and never create gold", function()
 		local host, controls = hostWithStark({ config = fx.config({ ["AI.MaxEvaluationsPerMonth"] = 0 }) })
-		local values = { nil, true, false, 0, -1, 1e308, -1e308, 0 / 0, "", "stark", "winterfell", string.rep("z", 80), {}, { 1, 2 } }
+		-- A real army, so fuzzed army commands reach validation and execution.
+		expect.result(host:handleRequest(1, Commands.RaiseArmy, { provinceId = "winterfell" }), Codes.Ok)
+		local values = {
+			nil, true, false, 0, -1, 1e308, -1e308, 0 / 0, "", "stark", "winterfell", "moat_cailin", "army_1",
+			string.rep("z", 80), {}, { 1, 2 },
+		}
 		local names = {}
 		for _, name in Commands do
 			table.insert(names, name)
 		end
 		table.insert(names, "Unknown")
-		local fields = { "provinceId", "targetHouseId", "houseId", "speed", "paused", "treasury" }
+		local fields = { "provinceId", "targetHouseId", "houseId", "speed", "paused", "treasury", "armyId", "intoArmyId" }
+		local armyCommands = {
+			[Commands.RaiseArmy] = true,
+			[Commands.RaiseAllLevies] = true,
+			[Commands.MoveArmy] = true,
+			[Commands.StopArmy] = true,
+			[Commands.SplitArmy] = true,
+			[Commands.MergeArmies] = true,
+			[Commands.DisbandArmy] = true,
+		}
+		local armyOrders = 0
 		local seed = 12345
+		-- The low bits of this generator repeat with a short period, so draw from the high bits.
 		local function nextInt(n)
 			seed = (seed * 1103515245 + 12345) % 2147483648
-			return seed % n + 1
+			return math.floor(seed / 65536) % n + 1
 		end
 		local goldBefore = fx.totalTreasury(host.sim.state)
 		for _ = 1, 2000 do
@@ -150,11 +181,85 @@ return function(t)
 				local ok, result = pcall(host.handleRequest, host, 1, name, payload)
 				expect.truthy(ok, `handleRequest threw for {name}: {tostring(result)}`)
 				expect.truthy(type(result) == "table" and type(result.code) == "string", "always returns a result")
+				expect.truthy(result.code ~= Codes.InternalError, `{name} failed on the server: {result.message}`)
+				if armyCommands[name] and result.code ~= Codes.InvalidPayload then
+					armyOrders += 1
+				end
 			end
 		end
+		expect.truthy(armyOrders > 0, "some fuzzed army orders reached validation")
 		-- No time passed (update is never called), so gold may only have been spent, never created.
 		expect.equal(host.sim.monthsProcessed, 0, "no month was processed")
 		expect.truthy(fx.totalTreasury(host.sim.state) <= goldBefore + 1e-9, "no gold was created")
 		expect.deepEqual(fx.StateInvariants.check(host.sim.state, fx.GameConfig), {}, "state still valid")
+	end)
+
+	t.test("fuzzed army orders over months of play keep the state valid and gold in the ledger", function()
+		local CommandProcessor = vr.require("ServerScriptService.Simulation.CommandProcessor")
+		local host, controls = hostWithStark({ config = fx.config({ ["AI.MaxEvaluationsPerMonth"] = 0 }) })
+		-- A foreign army among the targets (army_1 belongs to House Greyjoy).
+		expect.result(host.sim:submit({ kind = "player", userId = 2, houseId = "greyjoy" }, Commands.RaiseArmy, { provinceId = "pyke" }), Codes.Ok)
+		local names = {
+			Commands.RaiseArmy,
+			Commands.RaiseAllLevies,
+			Commands.MoveArmy,
+			Commands.StopArmy,
+			Commands.SplitArmy,
+			Commands.MergeArmies,
+			Commands.DisbandArmy,
+		}
+		-- Well-formed payloads: mostly real ids (the house's armies and provinces), some foreign or
+		-- unknown ones.
+		local provinceIds = { "winterfell", "moat_cailin", "white_harbor", "barrowlands", "wolfswood", "the_twins", "pyke", "dragonstone", "casterly_rock" }
+		local seed = 4242
+		local function nextInt(n)
+			seed = (seed * 1103515245 + 12345) % 2147483648
+			return math.floor(seed / 65536) % n + 1
+		end
+		local function pick(field: string): string
+			if field == "provinceId" then
+				return provinceIds[nextInt(#provinceIds)]
+			end
+			local armyIds = fx.TableUtil.sortedKeys(host.sim.state.armies)
+			table.insert(armyIds, "army_0")
+			table.insert(armyIds, "lannister")
+			return armyIds[nextInt(#armyIds)]
+		end
+		local accepted = {}
+		for step = 1, 1500 do
+			controls.advance(0.5)
+			local name = names[nextInt(#names)]
+			local payload = {}
+			for _, field in fx.TableUtil.sortedKeys(CommandProcessor.schemaFor(name)) do
+				payload[field] = pick(field)
+			end
+			local ok, result = pcall(host.handleRequest, host, 1, name, payload)
+			expect.truthy(ok, `handleRequest threw for {name}: {tostring(result)}`)
+			expect.truthy(result.code ~= Codes.InternalError, `{name} failed on the server: {result.message}`)
+			if result.ok then
+				accepted[name] = (accepted[name] or 0) + 1
+			end
+			if step % 10 == 0 then
+				host.sim:advanceDay()
+			end
+			if step % 100 == 0 then
+				expect.deepEqual(fx.StateInvariants.check(host.sim.state, host.config), {}, `state valid at step {step}`)
+			end
+		end
+		for _, name in names do
+			expect.truthy((accepted[name] or 0) > 0, `some {name} orders were carried out`)
+		end
+		-- Five months passed: every gold change is a ledger entry (upkeep included).
+		local bookmark = fx.Content.getBookmark(fx.GameConfig.DefaultBookmarkId)
+		for houseId, house in host.sim.state.houses do
+			local expected = bookmark.houses[houseId].treasury
+			for _, entry in house.ledger do
+				expected += entry.net
+			end
+			expect.near(house.treasury, expected, 1e-6, `{houseId} treasury follows its ledger`)
+		end
+		for _, line in controls.lines do
+			expect.falsy(string.find(line, "error:", 1, true), `unexpected error diagnostic: {line}`)
+		end
 	end)
 end

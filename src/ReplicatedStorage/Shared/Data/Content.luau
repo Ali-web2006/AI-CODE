@@ -5,6 +5,7 @@
 	Builds id -> definition lookups and sorted id lists once, then freezes everything. Both the
 	server and the client read content through this module. Raw definition lists are kept in
 	Content.raw so the ContentValidator can detect duplicate ids, which a lookup map would hide.
+	Content.military is the single unit table (classes, counters, units, compositions).
 ]]
 
 local GameTypes = require(script.Parent.Parent.Types.GameTypes)
@@ -20,6 +21,7 @@ local TraitDefinitions = require(script.Parent.Characters.TraitDefinitions)
 local CultureDefinitions = require(script.Parent.Characters.CultureDefinitions)
 local FaithDefinitions = require(script.Parent.Characters.FaithDefinitions)
 local LongSummer297 = require(script.Parent.Bookmarks.LongSummer297)
+local UnitDefinitions = require(script.Parent.Military.UnitDefinitions)
 
 local function indexById<T>(list: { T }): { [string]: T }
 	local index = {}
@@ -50,6 +52,8 @@ Content.raw = {
 	cultures = CultureDefinitions,
 	faiths = FaithDefinitions,
 	bookmarks = { LongSummer297 },
+	units = UnitDefinitions.units,
+	military = UnitDefinitions,
 }
 
 Content.terrains = indexById(TerrainDefinitions) :: { [string]: GameTypes.TerrainDefinition }
@@ -62,9 +66,14 @@ Content.cultures = indexById(CultureDefinitions) :: { [string]: GameTypes.Cultur
 Content.faiths = indexById(FaithDefinitions) :: { [string]: GameTypes.NamedDefinition }
 Content.bookmarks = indexById(Content.raw.bookmarks) :: { [string]: GameTypes.BookmarkDefinition }
 
+-- Military content: the whole unit table (classes, counters, compositions) and a unit lookup.
+Content.military = UnitDefinitions
+Content.units = indexById(UnitDefinitions.units) :: { [string]: GameTypes.UnitDefinition }
+
 -- Sorted id lists: iterate these (not the maps) wherever order matters.
 Content.provinceIds = sortedIds(ProvinceDefinitions)
 Content.houseIds = sortedIds(HouseDefinitions)
+Content.unitIds = sortedIds(UnitDefinitions.units)
 
 -- The world map canvas. Its drawing (outlines, colours, crests) is in MapData and only the client uses it.
 Content.map = { width = MapData.width, height = MapData.height } :: GameTypes.MapDefinition

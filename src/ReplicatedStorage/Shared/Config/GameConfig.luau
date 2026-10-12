@@ -13,7 +13,8 @@
 local GameConfig = {}
 
 -- Increment when the meaning of persisted campaign data changes (see CampaignSerializer).
-GameConfig.SchemaVersion = 1
+-- 2: armies, the army id counter and province levy and garrison pools.
+GameConfig.SchemaVersion = 2
 
 GameConfig.DefaultBookmarkId = "long_summer_297"
 
@@ -179,6 +180,74 @@ GameConfig.Persistence = {
 	AutosaveIntervalSeconds = 300,
 	-- Roblox DataStore values must stay under 4 MB; refuse to write anything above this.
 	MaxSerializedBytes = 3_500_000,
+}
+
+--[[ Military --------------------------------------------------------------------------------
+	Every province musters levies (men who can be raised into armies) and keeps a garrison (men
+	who never leave its walls). Unit stats and house compositions live in
+	Data/Military/UnitDefinitions; the formulas are in Shared/Rules/MilitaryRules and
+	MovementRules.
+
+	Levy maximum        = (LevyBase + LevyPerDevelopment * development) * holding.levyMultiplier
+	                      * terrain.manpower * region.manpower, rounded to LevyRounding men
+	Garrison maximum    = holding.garrisonBase + holding.garrisonPerDevelopment * development,
+	                      rounded to GarrisonRounding men
+	Ships               = round((terrain.shipsPerDevelopment + holding.shipsPerDevelopment)
+	                      * development * region.naval), summed over a house's unoccupied provinces
+	Monthly refill      = ceil(maximum * LevyReplenishPerMonth) levies (GarrisonReplenishPerMonth for
+	                      garrisons), never above the maximum
+	Raised levy units   = the levy split by the house composition (largest remainder, exact total)
+	Army upkeep (gold)  = sum over units (men / 1000 * unit.upkeep) * UpkeepPerThousandPerMonth
+	Army speed          = the speed of its slowest unit
+	Land leg (days)     = ceil(max(1, distance / MarchUnitsPerDay * ConnectionCost[kind]
+	                      * destination terrain.movementCost / army speed))
+	Sea leg (days)      = ceil(max(1, distance / SailUnitsPerDay)) (no terrain, no unit speed)
+	Ships needed        = ceil(men / ShipCapacity)
+	Starting morale     = MoraleBase + head-count-weighted unit morale bonus, within [0, MoraleMax]
+	Strength (display)  = sum(men * (attack + defense) / 2) / 1000
+	                      * (1 + StrengthPerMartial * (commander martial - CommanderMartialBaseline))
+	Every SupplyTickDays days: at home supply += SupplyGainHome and morale += MoraleRecoveryHome;
+	in hostile country supply -= ceil(SupplyLossForeign * terrain.supplyDrain); at zero supply the
+	army loses ceil(men * AttritionStarving) men and MoraleLossStarving morale.
+]]
+GameConfig.Military = {
+	LevyBase = 1200,
+	LevyPerDevelopment = 1700,
+	LevyRounding = 50,
+	GarrisonRounding = 10,
+	-- Share of the maximum refilled per month.
+	LevyReplenishPerMonth = 0.08,
+	GarrisonReplenishPerMonth = 0.15,
+	-- Smallest army that can be raised or split off.
+	MinArmySize = 100,
+	MaxArmiesPerHouse = 12,
+	-- Gold per 1,000 raised men per month, times the unit's upkeep factor.
+	UpkeepPerThousandPerMonth = 1.5,
+	-- Map units per day for speed-1.0 troops.
+	MarchUnitsPerDay = 12,
+	-- Multiplier on travel days per connection kind. Sea legs are timed by SailUnitsPerDay alone;
+	-- the sea entry only keeps the table complete.
+	ConnectionCost = { road = 0.8, river = 1.0, pass = 1.6, wild = 1.5, sea = 1.0 },
+	-- Map units per day at sea; sea legs ignore terrain and unit speed.
+	SailUnitsPerDay = 30,
+	-- Men carried per ship.
+	ShipCapacity = 100,
+	-- Youngest age at which a character may command an army.
+	MinCommanderAge = 16,
+	-- Commander martial at which the strength rating is unmodified, and the change per point.
+	CommanderMartialBaseline = 10,
+	StrengthPerMartial = 0.02,
+	-- Supply, morale and attrition are processed every this many days.
+	SupplyTickDays = 5,
+	SupplyMax = 100,
+	SupplyGainHome = 20,
+	SupplyLossForeign = 8,
+	MoraleMax = 100,
+	MoraleBase = 60,
+	MoraleRecoveryHome = 2,
+	MoraleLossStarving = 5,
+	-- Share of men lost per supply tick at zero supply.
+	AttritionStarving = 0.03,
 }
 
 GameConfig.Debug = {

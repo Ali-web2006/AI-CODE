@@ -70,6 +70,7 @@ function Fixtures.new(vr)
 			schemaVersion = config.SchemaVersion,
 			clockConfig = config.Clock,
 			aiConfig = config.AI,
+			militaryConfig = config.Military,
 		})
 	end
 

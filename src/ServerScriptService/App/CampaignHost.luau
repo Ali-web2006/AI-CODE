@@ -123,6 +123,7 @@ local function validateContent(config: Config, bookmark: GameTypes.BookmarkDefin
 		traits = raw.traits,
 		cultures = raw.cultures,
 		faiths = raw.faiths,
+		military = raw.military,
 		map = Content.map,
 	}, bookmark, config)
 	for _, warning in report.warnings do
@@ -169,6 +170,7 @@ function CampaignHost.new(options: Options): CampaignHost
 		schemaVersion = config.SchemaVersion,
 		clockConfig = config.Clock,
 		aiConfig = config.AI,
+		militaryConfig = config.Military,
 	})
 	local violations = StateInvariants.check(state, config)
 	if #violations > 0 then

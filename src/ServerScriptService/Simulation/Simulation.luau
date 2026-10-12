@@ -10,7 +10,10 @@
 	  update(dt)   real seconds -> whole days (GameClock) -> advanceDay() for each day
 	  advanceDay() moves the date forward one day, runs daily systems, and when the month changes
 	               runs the monthly systems for the month that just ended.
-	  Monthly systems run in this fixed order: Economy, Diplomacy (drift), AI.
+	  Daily systems: Military (army movement, then supply every few days).
+	  Monthly systems run in this fixed order: Economy, Military (levy and garrison refill),
+	  Diplomacy (drift), AI. Upkeep is settled before the pools refill, and the AI decides last,
+	  seeing the settled treasury and full pools.
 
 	The monthly guard: clock.lastProcessedMonthIndex is advanced exactly once per month. A month
 	at or before it is never processed again, regardless of speed changes, pauses or catch-up.
@@ -26,6 +29,7 @@ local Diagnostics = require(script.Parent.Diagnostics)
 local Diplomacy = require(script.Parent.Diplomacy)
 local Economy = require(script.Parent.Economy)
 local GameClock = require(script.Parent.GameClock)
+local Military = require(script.Parent.Military)
 local SimContext = require(script.Parent.SimContext)
 
 type SystemFn = (sim: SimContext.SimContext, index: number) -> ()
@@ -65,10 +69,13 @@ function Simulation.new(options: Options): Simulation
 			return false
 		end,
 		clock = GameClock.new(options.config.Clock),
-		-- Extension point: Phase 4/5 register daily systems (scheme progress, army movement).
-		dailySystems = {},
+		-- Military runs first every day; later phases add scheme progress and battles after it.
+		dailySystems = {
+			{ name = "Military", run = Military.processDay },
+		},
 		monthlySystems = {
 			{ name = "Economy", run = Economy.processMonth },
+			{ name = "Military", run = Military.processMonth },
 			{ name = "Diplomacy", run = Diplomacy.processMonth },
 			{ name = "AI", run = AIDirector.processMonth },
 		},

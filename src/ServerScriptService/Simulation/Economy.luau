@@ -4,7 +4,8 @@
 
 	Formulas live in Shared/Rules/EconomyRules; this module applies them:
 	  * processMonth: once per completed month, for every active house in id order:
-	      1. compute income from controlled holdings, 2. compute recurring expenses,
+	      1. compute income from controlled holdings, 2. compute recurring expenses (court,
+	         garrisons, administration and army upkeep),
 	      3. apply the net change to the treasury, 4. record a ledger entry and diagnostic,
 	      5. mark the house dirty for replication.
 	  * checkDevelop / develop: the validated "invest in province development" operation shared
@@ -15,6 +16,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CalendarDate = require(ReplicatedStorage.Shared.Util.CalendarDate)
 local Content = require(ReplicatedStorage.Shared.Data.Content)
 local EconomyRules = require(ReplicatedStorage.Shared.Rules.EconomyRules)
+local MilitaryRules = require(ReplicatedStorage.Shared.Rules.MilitaryRules)
 local Protocol = require(ReplicatedStorage.Shared.Net.Protocol)
 local CampaignState = require(script.Parent.CampaignState)
 local SimContext = require(script.Parent.SimContext)
@@ -25,13 +27,23 @@ local Codes = Protocol.ResultCodes
 
 local Economy = {}
 
+-- Monthly gold upkeep of every army of a house (summed in army id order).
+function Economy.armyUpkeep(sim: SimContext, houseId: string): number
+	local total = 0
+	for _, army in CampaignState.armiesOf(sim.state, houseId) do
+		total += MilitaryRules.upkeep(army.units, sim.config.Military)
+	end
+	return EconomyRules.roundGold(total)
+end
+
 function Economy.budgetFor(sim: SimContext, houseId: string): EconomyRules.HouseBudget
 	local state = sim.state
 	return EconomyRules.computeHouseBudget(
 		houseId,
 		CampaignState.ownedProvinces(state, houseId) :: any,
 		CampaignState.ruler(state, houseId),
-		sim.config.Economy
+		sim.config.Economy,
+		Economy.armyUpkeep(sim, houseId)
 	)
 end
 

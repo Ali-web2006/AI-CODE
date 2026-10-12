@@ -83,6 +83,7 @@ return function(t)
 		for _, relation in sim.state.relations do
 			expect.equal(relation.cooldowns.stark, nil, "Stark sent no envoys")
 		end
+		expect.deepEqual(fx.CampaignState.armiesOf(sim.state, "stark"), {}, "no army was raised for Stark")
 	end)
 
 	t.test("the same seed reproduces the same campaign; personalities come from traits", function()

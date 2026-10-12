@@ -29,7 +29,18 @@ type SimContext = SimContext.SimContext
 local Codes = Protocol.ResultCodes
 
 local registry: { [string]: CommandTypes.CommandDefinition } = {}
-for _, module in { script.Parent.Commands.DevelopProvince, script.Parent.Commands.ImproveRelations } do
+local commandModules = {
+	script.Parent.Commands.DevelopProvince,
+	script.Parent.Commands.ImproveRelations,
+	script.Parent.Commands.RaiseArmy,
+	script.Parent.Commands.RaiseAllLevies,
+	script.Parent.Commands.MoveArmy,
+	script.Parent.Commands.StopArmy,
+	script.Parent.Commands.SplitArmy,
+	script.Parent.Commands.MergeArmies,
+	script.Parent.Commands.DisbandArmy,
+}
+for _, module in commandModules do
 	local definition = require(module) :: CommandTypes.CommandDefinition
 	registry[definition.name] = definition
 end

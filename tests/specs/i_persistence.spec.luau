@@ -58,6 +58,129 @@ return function(t)
 		end
 	end)
 
+	-- A campaign with armies in every state: marching by land and by sea, waiting for ships,
+	-- gathering, leaderless, idle; plus emptied and refilling levy pools.
+	local function campaignWithArmies()
+		local sim = fx.newSim({
+			seed = 77,
+			config = fx.config({ ["AI.MaxEvaluationsPerMonth"] = 0, ["Military.ShipCapacity"] = 30 }),
+			human = { stark = true, greyjoy = true },
+		})
+		local stark = { kind = "player", userId = 1, houseId = "stark" }
+		local greyjoy = { kind = "player", userId = 2, houseId = "greyjoy" }
+		local function order(actor, command, payload)
+			expect.result(sim:submit(actor, command, payload), Codes.Ok, command)
+		end
+		order(stark, Commands.RaiseAllLevies, { provinceId = "white_harbor" })
+		order(stark, Commands.SplitArmy, { armyId = "army_1" })
+		order(greyjoy, Commands.RaiseArmy, { provinceId = "pyke" })
+		order(greyjoy, Commands.RaiseArmy, { provinceId = "harlaw" })
+		order(greyjoy, Commands.MoveArmy, { armyId = "army_7", provinceId = "lannisport" })
+		order(greyjoy, Commands.MoveArmy, { armyId = "army_8", provinceId = "lannisport" })
+		for _ = 1, 4 do
+			sim:advanceDay()
+		end
+		sim.state.clock.paused = true -- loaded campaigns always start paused
+		return sim
+	end
+
+	t.test("a campaign with armies on the march round-trips exactly", function()
+		local sim = campaignWithArmies()
+		local armies = sim.state.armies
+		expect.truthy(armies.army_7.legStartDay ~= nil and armies.army_8.legStartDay == nil, "one fleet at sea, one army waiting")
+		expect.truthy(armies.army_2.gather and armies.army_2.legStartDay ~= nil, "levies marching to the rally")
+		expect.equal(armies.army_6.commanderId, nil, "a leaderless army")
+		local record = jsonRoundTrip(Serializer.serialize(sim.state, 1700000000, "stark"))
+		expect.equal(record.schemaVersion, 2)
+		local result = Serializer.deserialize(record, sim.config)
+		expect.truthy(result.ok, `deserialize failed: {table.concat(result.errors, "; ")}`)
+		expect.deepEqual(result.warnings, {})
+		expect.deepEqual(result.state, sim.state)
+	end)
+
+	t.test("a schema 1 save loads with full levy pools and no armies", function()
+		local state = fx.newState()
+		local record = jsonRoundTrip(Serializer.serialize(state, 1, nil))
+		record.schemaVersion = 1
+		record.campaign.armies = nil
+		record.campaign.nextArmySerial = nil
+		for _, province in record.campaign.provinces do
+			province.levies = nil
+			province.garrisonTroops = nil
+		end
+		local result = Serializer.deserialize(record, fx.GameConfig)
+		expect.truthy(result.ok, `deserialize failed: {table.concat(result.errors, "; ")}`)
+		expect.deepEqual(result.warnings, {}, "no warnings for the new fields")
+		expect.deepEqual(result.state, state, "identical to a fresh campaign")
+		expect.equal(result.state.schemaVersion, 2)
+
+		-- Pools are sized to the saved development, not the bookmark's.
+		record = jsonRoundTrip(Serializer.serialize(state, 1, nil))
+		record.schemaVersion = 1
+		record.campaign.armies = nil
+		record.campaign.nextArmySerial = nil
+		for _, province in record.campaign.provinces do
+			province.levies = nil
+			province.garrisonTroops = nil
+		end
+		record.campaign.provinces.winterfell.development = 6
+		result = Serializer.deserialize(record, fx.GameConfig)
+		expect.truthy(result.ok, `deserialize failed: {table.concat(result.errors, "; ")}`)
+		local winterfell = result.state.provinces.winterfell
+		expect.equal(winterfell.levies, 15400, "(1,200 + 1,700 * 6) * 1.35, full")
+		expect.equal(winterfell.garrisonTroops, 1100)
+		expect.deepEqual(result.state.armies, {})
+		expect.equal(result.state.nextArmySerial, 1)
+	end)
+
+	t.test("malformed armies and pools are rejected with a reason", function()
+		local sim = campaignWithArmies()
+		local good = Serializer.serialize(sim.state, 1, nil)
+		local function broken(mutate)
+			local record = jsonRoundTrip(good)
+			mutate(record)
+			return Serializer.deserialize(record, sim.config)
+		end
+		local cases = {
+			{ "armies missing", function(r) r.campaign.armies = nil end, "armies are missing" },
+			{ "bad army counter", function(r) r.campaign.nextArmySerial = "nine" end, "army id counter is invalid" },
+			{ "army counter behind", function(r) r.campaign.nextArmySerial = 3 end, "serial is not below" },
+			{ "bad army id", function(r) r.campaign.armies["army x"] = r.campaign.armies.army_1 end, "not of the form army_<serial>" },
+			{ "unknown army house", function(r) r.campaign.armies.army_1.houseId = "targaryen" end, "unknown house 'targaryen'" },
+			{ "unknown army province", function(r) r.campaign.armies.army_1.locationId = "atlantis" end, "unknown province 'atlantis'" },
+			{ "unknown unit", function(r) r.campaign.armies.army_1.units.dragons = 3 end, "unknown unit 'dragons'" },
+			{ "fractional men", function(r) r.campaign.armies.army_1.units.archers = 1.5 end, "invalid head count" },
+			{ "no men", function(r) r.campaign.armies.army_1.units = {} end, "has no units" },
+			{ "zero men", function(r) r.campaign.armies.army_1.units.archers = 0 end, "has 0 men" },
+			{ "unknown commander", function(r) r.campaign.armies.army_1.commanderId = "aegon_targaryen" end, "unknown commander" },
+			{ "foreign commander", function(r) r.campaign.armies.army_1.commanderId = "balon_greyjoy" end, "is not of house 'stark'" },
+			{ "commander twice", function(r) r.campaign.armies.army_2.commanderId = r.campaign.armies.army_1.commanderId end, "already commands" },
+			{ "morale out of range", function(r) r.campaign.armies.army_1.morale = 101 end, "morale 101 is out of range" },
+			{ "supply not a number", function(r) r.campaign.armies.army_1.supply = "full" end, "morale or supply invalid" },
+			{ "route off the map", function(r) r.campaign.armies.army_2.route = { "atlantis" } end, "is not a province" },
+			{ "route not adjacent", function(r) r.campaign.armies.army_2.route = { "pyke" } end, "is not adjacent" },
+			{ "half a leg", function(r) r.campaign.armies.army_2.legEndDay = nil end, "only one leg day is set" },
+			{ "backwards leg", function(r) r.campaign.armies.army_2.legEndDay = r.campaign.armies.army_2.legStartDay end, "are invalid" },
+			{
+				"leg without route",
+				function(r)
+					r.campaign.armies.army_1.legStartDay = 1
+					r.campaign.armies.army_1.legEndDay = 2
+				end,
+				"has a leg but no route",
+			},
+			{ "bad flag", function(r) r.campaign.armies.army_1.gather = "yes" end, "flags invalid" },
+			{ "levies missing", function(r) r.campaign.provinces.winterfell.levies = nil end, "province 'winterfell' is malformed" },
+			{ "levies above the maximum", function(r) r.campaign.provinces.wolfswood.levies = 99999 end, "levies 99999 are outside" },
+			{ "negative garrison", function(r) r.campaign.provinces.winterfell.garrisonTroops = -1 end, "garrison -1 is outside" },
+		}
+		for _, case in cases do
+			local result = broken(case[2])
+			expect.falsy(result.ok, `{case[1]} should be rejected`)
+			expect.anyContains(result.errors, case[3], case[1])
+		end
+	end)
+
 	t.test("content added after a save is initialised from the bookmark with a warning", function()
 		local record = jsonRoundTrip(Serializer.serialize(fx.newState(), 1, nil))
 		record.campaign.provinces.the_arbor = nil
