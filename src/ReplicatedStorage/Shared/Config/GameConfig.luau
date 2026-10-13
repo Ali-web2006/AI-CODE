@@ -189,16 +189,21 @@ GameConfig.Persistence = {
 	MovementRules.
 
 	Levy maximum        = (LevyBase + LevyPerDevelopment * development) * holding.levyMultiplier
-	                      * terrain.manpower * region.manpower, rounded to LevyRounding men
-	Garrison maximum    = holding.garrisonBase + holding.garrisonPerDevelopment * development,
+	                      * terrain.manpower * region.manpower * levyMultiplier (buildings hook,
+	                      MilitaryRules.poolModifiers: 1 today), rounded to LevyRounding men
+	Garrison maximum    = (holding.garrisonBase + holding.garrisonPerDevelopment * development)
+	                      * garrisonMultiplier + garrisonFlat (buildings hook: 1 and 0 today),
 	                      rounded to GarrisonRounding men
 	Ships               = round((terrain.shipsPerDevelopment + holding.shipsPerDevelopment)
 	                      * development * region.naval), summed over a house's unoccupied provinces
 	Monthly refill      = ceil(maximum * LevyReplenishPerMonth) levies (GarrisonReplenishPerMonth for
 	                      garrisons), never above the maximum
 	Raised levy units   = the levy split by the house composition (largest remainder, exact total)
-	Army upkeep (gold)  = sum over units (men / 1000 * unit.upkeep) * UpkeepPerThousandPerMonth
-	Army speed          = the speed of its slowest unit
+	Army upkeep (gold)  = sum over units (men / 1000 * unit.upkeep) * UpkeepPerThousandPerMonth a
+	                      month, accrued day by day and charged pro rata (days in the field / days
+	                      in the month) in the monthly settlement
+	Army speed          = men / sum over units (men / unit.speed): the head-count-weighted
+	                      harmonic mean, the pace of the army's average man
 	Land leg (days)     = ceil(max(1, distance / MarchUnitsPerDay * ConnectionCost[kind]
 	                      * destination terrain.movementCost / army speed))
 	Sea leg (days)      = ceil(max(1, distance / SailUnitsPerDay)) (no terrain, no unit speed)

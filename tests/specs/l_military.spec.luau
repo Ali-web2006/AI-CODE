@@ -84,7 +84,7 @@ return function(t)
 			lannister = 42000,
 			baratheon = 40000,
 			stark = 39000,
-			arryn = 28000,
+			arryn = 36000,
 			martell = 26000,
 			tully = 21000,
 			greyjoy = 10000,
@@ -102,6 +102,9 @@ return function(t)
 			local larger, smaller = order[index], order[index + 1]
 			expect.truthy(men[larger] > men[smaller], `{larger} ({men[larger]}) outnumbers {smaller} ({men[smaller]})`)
 		end
+		-- The Westerlands and the Vale are strong, Dorne is middling: the Vale's host is well above
+		-- Dorne's, not level with it.
+		expect.truthy(men.arryn >= men.martell * 1.3, `the Vale ({men.arryn}) fields a strong host beside Dorne ({men.martell})`)
 
 		-- Greyjoy: the smallest great-house host but by far the largest fleet (about 200 ships).
 		expect.truthy(math.abs(ships.greyjoy - 200) <= 20, `greyjoy ships {ships.greyjoy}`)
@@ -197,27 +200,45 @@ return function(t)
 		expect.deepEqual(oneSplit, {}, "a single man cannot be halved")
 	end)
 
-	t.test("an army moves at the pace of its slowest unit", function()
+	t.test("an army moves at the average pace of its men", function()
+		local function near(actual: number, expected: number, label: string)
+			expect.truthy(math.abs(actual - expected) < 1e-9, `{label}: expected {expected}, got {actual}`)
+		end
 		expect.equal(MilitaryRules.armySpeed({}), 1, "empty")
-		expect.equal(MilitaryRules.armySpeed({ light_cavalry = 500 }), 1.35, "cavalry alone")
-		expect.equal(MilitaryRules.armySpeed(WINTERFELL_ARMY), 1.0, "Winterfell levy")
-		expect.equal(MilitaryRules.armySpeed({ light_cavalry = 500, siege_engines = 20 }), 0.85, "siege engines slow everyone")
+		near(MilitaryRules.armySpeed({ light_cavalry = 500 }), 1.35, "cavalry alone")
+		-- 10,800 men over 3,780 + 1,620 + 1,080 / 1.35 + 4,320 / 1.05 man-days per unit of ground.
+		near(MilitaryRules.armySpeed(WINTERFELL_ARMY), 10800 / (3780 + 1620 + 800 + 4320 / 1.05), "Winterfell levy")
+		-- A few siege engines slow a host of cavalry a little, not to their own pace.
+		near(MilitaryRules.armySpeed({ light_cavalry = 500, siege_engines = 20 }), 520 / (500 / 1.35 + 20 / 0.85), "siege engines")
+		expect.truthy(MilitaryRules.armySpeed({ light_cavalry = 500, siege_engines = 20 }) > 1.3, "cavalry still outpaces men on foot")
+
+		-- Every house's swift units count: each great host is faster than plain levy spearmen, the
+		-- Dornish and the Reach fastest, the Stormlands (hammers and siege engines) slowest.
+		local speeds = {}
+		for _, houseId in Content.houseIds do
+			speeds[houseId] = MilitaryRules.armySpeed(MilitaryRules.splitMen(10000, MilitaryRules.composition(houseId)))
+			expect.truthy(speeds[houseId] > 1, `{houseId} levy outpaces spearmen alone ({speeds[houseId]})`)
+		end
+		expect.truthy(speeds.martell > speeds.tyrell and speeds.tyrell > speeds.stark, "Dorne, then the Reach, outpace the North")
+		for _, houseId in { "stark", "lannister", "greyjoy", "tyrell", "martell", "arryn", "tully" } do
+			expect.truthy(speeds.baratheon < speeds[houseId], `the stormlords march slower than {houseId}`)
+		end
 	end)
 
 	-- Formulas: movement ----------------------------------------------------------------------
 
 	t.test("leg days depend on distance, connection, destination terrain and speed", function()
 		local cases = {
-			-- from, to, Winterfell levy, cavalry alone
-			-- road into coast: 194.88 / 12 * road 0.8 * coast 1.0 = 12.99 -> 13 (/ 1.35 -> 10)
+			-- from, to, Winterfell levy (pace 1.0471), cavalry alone (1.35)
+			-- road into coast: 194.88 / 12 * road 0.8 * coast 1.0 = 12.99 / 1.0471 = 12.41 -> 13 (/ 1.35 -> 10)
 			{ "winterfell", "white_harbor", 13, 10 },
-			-- road into the marsh of the Neck: 116.85 / 12 * 0.8 * marsh 1.8 = 14.02 -> 15
-			{ "white_harbor", "moat_cailin", 15, 11 },
+			-- road into the marsh of the Neck: 116.85 / 12 * 0.8 * marsh 1.8 = 14.02 / 1.0471 = 13.39 -> 14
+			{ "white_harbor", "moat_cailin", 14, 11 },
 			{ "barrowlands", "moat_cailin", 19, 15 },
-			-- the mountain pass to the Eyrie: 82.86 / 12 * pass 1.6 * mountains 1.7 = 18.78 -> 19
-			{ "bloody_gate", "the_eyrie", 19, 14 },
-			-- river: 137.61 / 12 * river 1.0 * plains 1.0 = 11.47 -> 12
-			{ "the_twins", "riverrun", 12, 9 },
+			-- the mountain pass to the Eyrie: 82.86 / 12 * pass 1.6 * mountains 1.7 = 18.78 / 1.0471 -> 18
+			{ "bloody_gate", "the_eyrie", 18, 14 },
+			-- river: 137.61 / 12 * river 1.0 * plains 1.0 = 11.47 / 1.0471 = 10.95 -> 11
+			{ "the_twins", "riverrun", 11, 9 },
 			-- sea: 269.05 / 30 = 8.97 -> 9, whatever the army
 			{ "pyke", "lannisport", 9, 9 },
 		}
@@ -245,7 +266,7 @@ return function(t)
 	t.test("findPath takes the fastest route and only sails when allowed", function()
 		local path, days = MovementRules.findPath("winterfell", "moat_cailin", WINTERFELL_ARMY, true, military)
 		expect.deepEqual(path, { "white_harbor", "moat_cailin" }, "through White Harbor")
-		expect.equal(days, 13 + 15)
+		expect.equal(days, 13 + 14)
 
 		path, days = MovementRules.findPath("winterfell", "winterfell", WINTERFELL_ARMY, true, military)
 		expect.deepEqual(path, {}, "already there")
@@ -657,8 +678,8 @@ return function(t)
 		army.morale = military.MoraleMax
 		local start = today(sim)
 		local result = submitOk(sim, STARK, Commands.MoveArmy, { armyId = "army_1", provinceId = "moat_cailin" })
-		expect.equal(result.message, "The Army of Winterfell marches to Moat Cailin (28 days).")
-		expect.equal(result.data.days, 28)
+		expect.equal(result.message, "The Army of Winterfell marches to Moat Cailin (27 days).")
+		expect.equal(result.data.days, 27)
 		expect.equal(result.data.waiting, false)
 		expect.deepEqual(army.route, { "white_harbor", "moat_cailin" })
 		expect.equal(army.legStartDay, start)
@@ -676,15 +697,15 @@ return function(t)
 		expect.equal(army.locationId, "white_harbor", "first leg done on day 13")
 		expect.deepEqual(army.route, { "moat_cailin" })
 		expect.equal(army.legStartDay, start + 13)
-		expect.equal(army.legEndDay, start + 28, "the marsh of the Neck takes 15 days")
+		expect.equal(army.legEndDay, start + 27, "the marsh of the Neck takes 14 days")
 		expect.truthy(sim.journal.changes.armies.army_1, "the new leg is replicated")
 		expect.equal(#eventsOf(sim.journal.changes.events, "ArmyArrived"), 0, "no arrival event at a waypoint")
 
-		advanceDays(sim, 14)
-		expect.equal(army.locationId, "white_harbor", "day 27: still marching")
+		advanceDays(sim, 13)
+		expect.equal(army.locationId, "white_harbor", "day 26: still marching")
 		sim.journal:flush()
 		sim:advanceDay()
-		expect.equal(army.locationId, "moat_cailin", "arrived on day 28")
+		expect.equal(army.locationId, "moat_cailin", "arrived on day 27")
 		expect.deepEqual(army.route, {})
 		expect.equal(army.legStartDay, nil)
 		expect.equal(army.legEndDay, nil)
@@ -816,6 +837,9 @@ return function(t)
 		expect.deepEqual(second.route, {})
 		submitOk(sim, GREYJOY, Commands.MoveArmy, { armyId = "army_2", provinceId = "lannisport" })
 		expect.equal(second.legStartDay, nil, "waiting again")
+		-- Ordering a waiting army to the port it stands in is no march: Stop cancels a wait.
+		expectRejected(sim, GREYJOY, Commands.MoveArmy, { armyId = "army_2", provinceId = "harlaw" }, Codes.InvalidTarget, "a waiting army sent to its own port")
+		expect.equal(sim:submit(GREYJOY, Commands.MoveArmy, { armyId = "army_2", provinceId = "harlaw" }).message, "The Army of Ten Towers is already at Harlaw.")
 
 		sim.journal:flush()
 		advanceDays(sim, 8)
@@ -977,6 +1001,39 @@ return function(t)
 		expect.near(entry.expenses - plainEntry.expenses, 18.06, 0.011, "charged once in the ledger")
 		expect.near(plain.state.houses.stark.treasury - sim.state.houses.stark.treasury, 18.06, 0.011, "and paid from the treasury")
 		expect.near(sim.state.houses.stark.treasury, startTreasury + entry.net, 1e-9, "only through the ledger")
+		expect.equal(sim.state.houses.stark.armyUpkeepAccrued, 0, "the accrual starts again after the settlement")
+	end)
+
+	t.test("army upkeep is paid for the days an army is in the field", function()
+		-- January has 31 days; the settlement on 1 February charges what the armies accrued since
+		-- 1 January (the days 2 January to 1 February), divided by 31.
+		local plain = quietSim()
+		plain:advanceToNextMonth()
+		local plainExpenses = plain.state.houses.stark.ledger[1].expenses
+
+		-- Disbanded after 15 days: 15/31 of a month, not nothing.
+		local brief = quietSim()
+		submitOk(brief, STARK, Commands.RaiseArmy, { provinceId = "winterfell" })
+		advanceDays(brief, 15)
+		expect.equal(brief.state.houses.stark.armyUpkeepAccrued, fx.EconomyRules.roundGold(15 * 18.06), "a day of upkeep per day")
+		submitOk(brief, STARK, Commands.DisbandArmy, { armyId = "army_1" })
+		brief:advanceToNextMonth()
+		expect.near(brief.state.houses.stark.ledger[1].expenses - plainExpenses, 8.74, 0.011, "15 * 18.06 / 31")
+		expect.equal(brief.state.houses.stark.armyUpkeepAccrued, 0, "settled")
+
+		-- Raised on 22 January: 10 days.
+		local late = quietSim()
+		advanceDays(late, 21)
+		submitOk(late, STARK, Commands.RaiseArmy, { provinceId = "winterfell" })
+		late:advanceToNextMonth()
+		expect.near(late.state.houses.stark.ledger[1].expenses - plainExpenses, 5.83, 0.011, "10 * 18.06 / 31")
+
+		-- In the field all month: exactly the monthly upkeep, as the budget preview shows.
+		local whole = quietSim()
+		submitOk(whole, STARK, Commands.RaiseArmy, { provinceId = "winterfell" })
+		whole:advanceToNextMonth()
+		expect.near(whole.state.houses.stark.ledger[1].expenses - plainExpenses, 18.06, 0.011, "a whole month")
+		expectValid(whole)
 	end)
 
 	t.test("supply drains abroad, starvation kills men, and supply returns at home", function()
@@ -989,13 +1046,17 @@ return function(t)
 		advanceToSupplyTick(sim)
 		expect.equal(army.supply, 60)
 		expect.equal(army.morale, morale, "no morale lost while supplied")
+		sim.journal:flush()
 		advanceToSupplyTick(sim)
 		expect.equal(army.supply, 20)
+		expect.truthy(sim.journal.changes.armies.army_1, "the supply change is replicated")
+		expect.equal(sim.journal.changes.houses.stark, nil, "but the house view, which shows no supply, is not")
 		sim.journal:flush()
 		advanceToSupplyTick(sim)
 		expect.equal(army.supply, 0)
 		expect.equal(army.starving, true)
 		expect.equal(MilitaryRules.troops(army.units), 1150 - 35, "ceil(1,150 * 3%) men starved")
+		expect.truthy(sim.journal.changes.houses.stark, "men lost change the house's troops and upkeep")
 		expect.equal(army.morale, morale - military.MoraleLossStarving)
 		local starving = eventsOf(sim.journal.changes.events, "ArmyStarving")
 		expect.equal(#starving, 1)
@@ -1054,6 +1115,44 @@ return function(t)
 		expect.equal(EventText.format(deserted[1], "stark"), "The Army of Moat Cailin melted away in The Twins: its last 35 men deserted.")
 		expect.equal(Economy.budgetFor(sim:context(), "stark").armyUpkeep, 0)
 		expectValid(sim)
+	end)
+
+	t.test("the buildings hook: pool modifiers reach every levy and garrison maximum", function()
+		local sim = quietSim()
+		local winterfell = sim.state.provinces.winterfell
+		expect.deepEqual(MilitaryRules.poolModifiers(winterfell), { levyMultiplier = 1, garrisonMultiplier = 1, garrisonFlat = 0 }, "no buildings yet")
+		expect.equal(MilitaryRules.provinceLevyMax(winterfell, military), 10800)
+		expect.equal(MilitaryRules.provinceGarrisonMax(winterfell, military), 900)
+		local keep = { levyMultiplier = 1.5, garrisonMultiplier = 2, garrisonFlat = 100 }
+		expect.equal(MilitaryRules.levyMax("winterfell", 4, military, keep), 16200, "10,800 * 1.5")
+		expect.equal(MilitaryRules.garrisonMax("winterfell", 4, military, keep), 1900, "900 * 2 + 100")
+
+		-- A buildings phase replaces only poolModifiers; the views, refills, disbanding and the
+		-- invariants all follow it.
+		local context = sim:context()
+		local houseLevies = Snapshot.houseView(context, "stark").military.leviesMax
+		local original = MilitaryRules.poolModifiers
+		MilitaryRules.poolModifiers = function(province)
+			return if province.id == "winterfell" then keep else original(province)
+		end
+		local ok, failure = pcall(function()
+			local view = Snapshot.provinceView(context, "winterfell")
+			expect.equal(view.leviesMax, 16200, "the province view")
+			expect.equal(view.garrisonMax, 1900)
+			expect.equal(Snapshot.houseView(context, "stark").military.leviesMax, houseLevies + 5400, "the house totals")
+			submitOk(sim, STARK, Commands.RaiseArmy, { provinceId = "winterfell" })
+			sim:advanceToNextMonth()
+			expect.equal(winterfell.levies, 1296, "refilled by ceil(16,200 * 8%)")
+			expect.equal(winterfell.garrisonTroops, 900 + 285, "garrison refilled by ceil(1,900 * 15%)")
+			submitOk(sim, STARK, Commands.DisbandArmy, { armyId = "army_1" })
+			expect.equal(winterfell.levies, 10800 + 1296, "disbanding refills above the old maximum")
+			winterfell.levies = 16200
+			expectValid(sim)
+		end)
+		MilitaryRules.poolModifiers = original
+		if not ok then
+			error(failure, 0)
+		end
 	end)
 
 	t.test("levy and garrison pools refill every month up to their maximum", function()
@@ -1185,7 +1284,7 @@ return function(t)
 		expect.equal(view.commanderId, "eddard_stark")
 		expect.equal(view.strength, MilitaryRules.strength(WINTERFELL_ARMY, 13))
 		expect.equal(view.upkeep, 18.06)
-		expect.equal(view.speed, 1)
+		expect.equal(view.speed, MilitaryRules.armySpeed(WINTERFELL_ARMY))
 		local province = replica:province("winterfell")
 		expect.equal(province.levies, 0)
 		expect.equal(province.leviesMax, 10800)

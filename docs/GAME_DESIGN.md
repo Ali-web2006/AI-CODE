@@ -89,7 +89,8 @@ Consequences:
 * The province panel shows the exact gain and payback period before you buy.
 * A treasury can go negative only through upkeep (debt). A negative treasury triggers a crisis
   event, and nothing can be bought until it recovers.
-* Occupied provinces produce nothing for their owner. This is the hook for Phase 5 war.
+* Occupied provinces produce nothing for their owner. This is the hook for war (Phase 2, battles
+  and sieges).
 
 Starting positions (from `tests/house_report.luau`):
 
@@ -138,7 +139,7 @@ Each house plays differently:
   * Example: Eddard Stark (Diplomacy 8, Honest) courting Tywin Lannister (Proud):
     8 + 4 + 2 − 2 = +12, moving relations from −10 to +2.
 * Relations do not yet trigger treaties. They are the foundation for alliances, marriages and AI
-  acceptance decisions in Phase 4.
+  acceptance decisions (Phase 4 gives the AI personalities and stances, Phase 8 treaties).
 
 ## Military (formulas in `Shared/Rules/MilitaryRules.luau` and `MovementRules.luau`, constants in `GameConfig.Military`, units in `Data/Military/UnitDefinitions.luau`)
 
@@ -161,6 +162,13 @@ Monthly refill    = ceil(8% of the levy maximum) levies and ceil(15% of the garr
 
 A house's fleet is the sum of the ships of the provinces it holds (owned and not occupied). Every
 pool starts full. Raising empties a province's levy pool; it takes about a year to refill.
+
+**Buildings hook.** Both maximums also take pool modifiers from the province's state
+(`MilitaryRules.poolModifiers`): a levy multiplier, and a garrison multiplier plus flat garrison
+men. No buildings exist yet, so they are ×1, ×1 and +0. The buildings phase (Phase 5) fills them
+in, for example a barracks for more levies or curtain walls for a larger garrison, and every pool,
+view and refill follows. If a balance change lowers a maximum, pools (and an army's morale and
+supply) above it are lowered to it, in play and when a save is loaded.
 
 | Terrain | Movement cost | Manpower | Ships per development | Supply drain |
 |---|---|---|---|---|
@@ -186,7 +194,7 @@ pool starts full. Raising empties a province's levy pool; it takes about a year 
 | The North | ×1.35 | ×1 |
 | The Iron Islands | ×1.0 | ×10 |
 | The Riverlands | ×1.05 | ×1 |
-| The Vale of Arryn | ×1.65 | ×1 |
+| The Vale of Arryn | ×2.2 | ×1 |
 | The Westerlands | ×1.3 | ×1.3 |
 | The Crownlands | ×0.9 | ×1.6 |
 | The Stormlands | ×1.15 | ×1 |
@@ -202,7 +210,7 @@ The constants are calibrated to the lore of 297 AC. At the bookmark (full pools)
 | Lannister | 36,700 | 5,620 | 42,320 | 39 |
 | Baratheon (Crownlands and Stormlands) | 33,350 | 6,910 | 40,260 | 67 |
 | Stark | 33,350 | 5,300 | 38,650 | 25 |
-| Arryn | 24,150 | 4,100 | 28,250 | 25 |
+| Arryn | 32,200 | 4,100 | 36,300 | 25 |
 | Martell | 20,850 | 4,900 | 25,750 | 15 |
 | Tully | 18,550 | 2,560 | 21,110 | 15 |
 | Greyjoy | 8,750 | 1,500 | 10,250 | 200 |
@@ -252,11 +260,19 @@ region and situation multipliers are also combat hooks for later phases.
 ### Armies
 
 ```
-Upkeep (gold/month) = Σ (men / 1,000 × unit upkeep) × 1.5, charged in the monthly settlement
+Upkeep (gold/month) = Σ (men / 1,000 × unit upkeep) × 1.5; it accrues for every day the army is in
+                      the field and is settled monthly: the month's charge is the sum of each
+                      day's monthly upkeep divided by the days of the month
 Starting morale     = 60 + head-count-weighted unit morale bonus, at most 100; supply starts at 100
 Strength (display)  = Σ (men × (attack + defence) / 2) / 1,000 × (1 + 0.02 × (commander martial − 10))
-Army speed          = the speed of its slowest unit
+Army speed          = men / Σ (men / unit speed): the pace of the army's average man (a
+                      head-count-weighted harmonic mean), so swift units speed an army up in
+                      proportion to their numbers and a few siege engines slow it only a little
 ```
+
+Pace of each house's levy: Martell ×1.13 (Dornish spearmen), Tyrell ×1.10 (Reach cavalry), Arryn
+and Greyjoy ×1.06, Stark and Lannister ×1.05, Tully and the minor houses ×1.04, Baratheon ×1.02
+(warhammers and siege engines).
 
 * **Raise levies:** raises every available levy of a province the house holds (at least 100
   men) into one army, named after the holding: "Army of Winterfell". A house keeps at most 12
@@ -277,7 +293,9 @@ Army speed          = the speed of its slowest unit
   is refunded.
 * **Upkeep:** the Winterfell levy costs 18.06 gold a month; Stark's whole levy about 56, against
   a net income of 17.9. Raising everything bankrupts a house within months, so armies are raised
-  for a purpose and sent home afterwards.
+  for a purpose and sent home afterwards. Upkeep is paid for the days an army is in the field:
+  one disbanded after 15 days of January costs 15/31 of a month (8.74 gold for the Winterfell
+  levy), so sending an army home just before the month ends saves nothing.
 
 ### Movement
 
@@ -295,9 +313,9 @@ Ships needed    = ceil(men / 100)
   destination can only be reached by sea, the order is refused ("not enough ships").
 * At sea the army needs that many **free** ships: the fleet minus the ships carrying the house's
   other armies at sea. Otherwise it waits in port and sails as soon as enough ships are free.
-* Examples: Winterfell's levy reaches Moat Cailin in 28 days through White Harbor (13 days by
-  road, then 15 into the marsh of the Neck); Pyke's ironborn sail to Lannisport in 9 days; Stark's
-  25 ships cannot carry 10,800 men to Dragonstone.
+* Examples: Winterfell's levy (pace ×1.05) reaches Moat Cailin in 27 days through White Harbor
+  (13 days by road, then 14 into the marsh of the Neck); Pyke's ironborn sail to Lannisport in 9
+  days; Stark's 25 ships cannot carry 10,800 men to Dragonstone.
 * A new order keeps the leg under way and replaces the rest of the route; **Stop** halts the army
   at the end of the current leg (a waiting army simply stays).
 
@@ -345,7 +363,7 @@ Balance over a 30-year all-AI run (`tests/balance_report.luau`):
   * Diplomacy improves envoys.
   * Martial decides who leads the house's armies and improves their strength rating.
   * Traits modify taxes, court costs, envoys and AI personality.
-* Births, deaths, marriages and succession arrive in Phase 2.
+* Births, deaths, marriages and succession arrive in Phase 6.
 
 ## The map
 
@@ -376,6 +394,9 @@ Balance over a 30-year all-AI run (`tests/balance_report.luau`):
   * Relations: green to grey to red, relative to your house.
   * Wealth: monthly income.
   * Terrain.
+  * Military: from pale to deep red by the men present in each province (its
+    garrison plus the armies standing there), relative to the province with the most. Each
+    holding icon also gets a "Garrison 1,800" label, shown from the zoom at which icons appear.
 * Gold outlines: thin around your own provinces, thick around the selected one.
 * Detail by zoom: crests and great-house labels are always shown (crests fade when zoomed far
   in); location icons appear from a medium zoom and their names from a closer one. A toggle
@@ -392,24 +413,69 @@ Balance over a 30-year all-AI run (`tests/balance_report.luau`):
   * procedural heraldic shields: field colour, division and monogram, with no third-party art
 * **Top bar:**
   * house shield, name, ruler and age
-  * treasury, with a tooltip giving the full monthly budget line by line
-  * provinces and total development
+  * treasury, with a tooltip giving the full monthly budget line by line (army upkeep included)
+  * troops: the house's total men; the tooltip breaks them down into armies, levies at home (of
+    their maximum), garrisons, ships (and ships at sea) and army upkeep per month. A click opens
+    the Military tab.
+  * provinces and total development (hidden in the compact layout)
   * date
   * speed controls
   * Campaign menu: save, load, storage status, and dev tools in Studio
 * **Tabs:**
-  * **Map:** the province panel.
-  * **Realm:** ruler, skills, traits, family, finances, settled ledger, holdings.
+  * **Map:** the province panel. Its Military section shows the province's levies and garrison
+    (each of its maximum), its ships, and the armies standing there (a click selects one). On a
+    province you hold it offers "Raise levies here (N men)" and "Call all levies here", with the
+    commander and the upkeep in the tooltip.
+  * **Realm:** ruler, skills, traits, family, finances (army upkeep included), settled ledger,
+    holdings.
+  * **Military:** your forces (total men, men in armies, levies, garrisons, ships, army upkeep),
+    the list of your armies with their orders, and the selected army: commander and martial,
+    troops, strength, upkeep, pace, morale and supply bars, its orders with the arrival estimate,
+    and its composition (unit, class, men, share). Your own army has Move…, Stop, Split, one
+    "Merge with …" button for every other idle army of yours in the same province, and Disband…
+    (a second click confirms it and says how many men the levy pools can take back). Another
+    house's army is shown read-only.
   * **Diplomacy:** houses sorted by relation, the reason for each baseline, the envoy action with
     its preview.
   * **Chronicle:** the event log.
+* **Armies on the map:**
+  * Each army is a token in its house's map colour with a dark edge, a small crest and its troop
+    count in large figures. Tokens keep the same size on screen at every zoom, stand just above
+    the province's holding icon (so the icon stays visible), and stack when several armies stand
+    together. The selected army has a gold edge.
+  * Armies glide between provinces. The server sends only the current leg and the day it ends;
+    the client places the token by day, moving it smoothly between updates, and snaps it into
+    place when the clock is paused.
+  * Your own marching armies, and the selected army, show their route as a line of dots ending
+    in an arrowhead. The dots behind an army disappear as it advances.
+  * Hovering a token shows its name, men, commander and orders with the arrival estimate;
+    clicking selects it and opens the Military tab. Dragging the map by a token pans it without
+    selecting the army.
+* **Giving orders:** Move… puts the army in move mode: the next click on land (or a holding icon)
+  is its destination, and a click on another army's token sends it where that army stands. A
+  toast confirms the march and its length in days. A right-click, Esc (or anything else that
+  opens the Roblox menu), Cancel move, leaving the Military tab or hiding the panel ends move mode
+  without an order. Outside move mode, a right-click on land marches the selected army there, a
+  right-click on another army's token marches it to that army's province (never to the land drawn
+  under the raised banner; a right-click on its own token does nothing), and a left click on the
+  map selects the province (or clears the selection, on the sea) and deselects the army, so no
+  hidden selection keeps taking right-click orders. Loading a campaign deselects the army and
+  cancels move mode. Orders take the fastest route, by sea only when the fleet can carry the
+  whole army. An army waiting for free ships reads "Waiting for ships at …"; ordering it to the
+  port it waits in is refused (Stop cancels the voyage).
 * **Disabled buttons always say why:**
   * insufficient gold
   * cooldown, and when it ends
-  * not your province
+  * not your province, or occupied
+  * too few levies to raise an army, or levies that cannot reach the rally province
+  * the limit of 12 armies
+  * an army that cannot split (marching, or halves under 100 men), merge (marching) or stop (no
+    orders)
   * host-only actions
-* **Notifications:** toasts appear only for important events (rejections, envoys to your court,
-  treasury crises, saves and loads). Routine events go to the Chronicle.
+* **Notifications:** toasts appear only for important events: rejections, envoys to your court,
+  treasury crises, saves and loads, armies raised, levies called, arrivals, starving armies and
+  desertions, and confirmations of march orders. Routine events (splits, merges, disbanding) go
+  to the Chronicle.
 * **Responsive layout:**
   * One UI scale fits any screen.
   * A compact layout narrows the rail and the panel.
@@ -419,10 +485,10 @@ Balance over a 30-year all-AI run (`tests/balance_report.luau`):
 ## Assumptions that affect implementation
 
 * In Phase 1 all ten houses are independent actors; historically they are vassals of the Iron
-  Throne. The feudal hierarchy is Phase 3.
+  Throne. The feudal hierarchy is Phase 7.
 * Characters married into houses not on the map (Olenna Redwyne, Joanna Lannister) are listed
-  under their marital house. Separate dynasty and birth-house fields arrive in Phase 2.
+  under their marital house. Separate dynasty and birth-house fields arrive in Phase 6.
 * There are no leap years. AC dating applies throughout.
 * All campaign state is public to all players in Phase 1. The per-viewer `Snapshot` exists so
   that secrets and hidden treasuries can be added later.
-* Persistence is one save slot per host. Persistent shared campaigns are Phase 7.
+* Persistence is one save slot per host. Persistent shared campaigns are Phase 9.

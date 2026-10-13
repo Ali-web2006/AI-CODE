@@ -9,7 +9,7 @@
 
 	Scope note: this prototype models ten houses as independent political actors on a 34-province
 	map. Historically all of them owe fealty to the Iron Throne; the feudal hierarchy arrives in
-	Phase 3. The bookmark is internally consistent rather than a complete historical reconstruction.
+	Phase 7. The bookmark is internally consistent rather than a complete historical reconstruction.
 
 	Relations are symmetric baselines. Monthly drift pulls the current score back toward them.
 ]]

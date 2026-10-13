@@ -7,8 +7,8 @@
 	    merge, disband), shared by players and (in later phases) the AI. A check is pure and never
 	    throws; an apply re-checks, computes first, mutates last, marks the journal, emits its event
 	    and returns (true, data) or (false, check).
-	  * processDay, the first daily system: armies arrive, gather and depart; every SupplyTickDays
-	    days supply, morale and starvation attrition are applied.
+	  * processDay, the first daily system: armies arrive, gather and depart; every army accrues a
+	    day of upkeep; every SupplyTickDays days supply, morale and starvation attrition are applied.
 	  * processMonth, after Economy and before Diplomacy and the AI: levy and garrison pools refill.
 
 	Movement: an army stores its remaining route and the day numbers of the current leg. Nothing
@@ -18,14 +18,19 @@
 	its armies already at sea. Without them the army waits (route set, both leg days nil) and tries
 	again every day.
 
-	Every army change also marks the owning house, because houseView carries the troop totals and
-	the budget (army upkeep). Gold is never touched here: upkeep is charged by Economy through the
-	monthly ledger, and disbanding refunds nothing.
+	Army changes that can alter the house view (troop totals, upkeep, ships in use) also mark the
+	owning house; a supply tick that changes only supply, morale or the starving flag marks the
+	army alone, so house panels do not redraw every few days.
+
+	Gold is never touched here. Each day every army adds its monthly upkeep to
+	house.armyUpkeepAccrued; Economy charges the accrued sum pro rata in the monthly ledger, so an
+	army pays for exactly the days it was in the field. Disbanding refunds nothing.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CharacterRules = require(ReplicatedStorage.Shared.Rules.CharacterRules)
 local Content = require(ReplicatedStorage.Shared.Data.Content)
+local EconomyRules = require(ReplicatedStorage.Shared.Rules.EconomyRules)
 local EventText = require(ReplicatedStorage.Shared.Text.EventText)
 local GameTypes = require(ReplicatedStorage.Shared.Types.GameTypes)
 local MilitaryRules = require(ReplicatedStorage.Shared.Rules.MilitaryRules)
@@ -508,6 +513,11 @@ function Military.checkMoveArmy(sim: SimContext, houseId: string, armyId: string
 		return reject(Codes.NotFound, "That province does not exist.")
 	end
 	local name = MilitaryRules.armyName(army)
+	-- An army waiting for ships still stands where it is: sending it there is no march (Stop
+	-- cancels the wait).
+	if not Military.inTransit(army) and provinceId == army.locationId then
+		return reject(Codes.InvalidTarget, `The {name} is already at {definition.name}.`)
+	end
 	local destination = if #army.route > 0 then army.route[#army.route] else army.locationId
 	if provinceId == destination then
 		if #army.route > 0 then
@@ -770,7 +780,7 @@ function Military.applyDisbandArmy(sim: SimContext, houseId: string, armyId: str
 	local capacity = 0
 	for _, province in CampaignState.ownedProvinces(state, houseId) do
 		if Military.holdsProvince(province, houseId) then
-			local deficit = MilitaryRules.levyMax(province.id, province.development, config) - province.levies
+			local deficit = MilitaryRules.provinceLevyMax(province, config) - province.levies
 			if deficit > 0 then
 				deficits[province.id] = deficit
 				capacity += deficit
@@ -898,11 +908,17 @@ local function supplyTick(sim: SimContext, army: ArmyState)
 	end
 	local startedStarving = starving and not army.starving
 	if supply ~= army.supply or morale ~= army.morale or starving ~= army.starving or units ~= army.units then
+		-- Only lost men change the house's troop totals and upkeep; supply and morale are army data.
+		local lostMen = units ~= army.units
 		army.supply = supply
 		army.morale = morale
 		army.starving = starving
 		army.units = units
-		markArmy(sim, army)
+		if lostMen then
+			markArmy(sim, army)
+		else
+			sim.journal:markArmy(army.id)
+		end
 	end
 	if startedStarving then
 		SimContext.emitEvent(sim, "ArmyStarving", "high", { army.houseId }, {
@@ -914,7 +930,12 @@ local function supplyTick(sim: SimContext, army: ArmyState)
 	end
 end
 
--- Daily system: movement for every army with orders, then (every SupplyTickDays days) supply.
+--[[
+	Daily system: movement for every army with orders, then a day of upkeep for every army, then
+	(every SupplyTickDays days) supply. A day of upkeep adds the army's monthly upkeep to its
+	house's accrued sum, which the monthly settlement divides by the days of the month; it is kept
+	in hundredths of gold, so a save stores it exactly.
+]]
 function Military.processDay(sim: SimContext, dayNumber: number)
 	local state = sim.state
 	for _, armyId in TableUtil.sortedKeys(state.armies) do
@@ -922,6 +943,13 @@ function Military.processDay(sim: SimContext, dayNumber: number)
 		-- An army may have merged into another earlier in this pass.
 		if army ~= nil and #army.route > 0 then
 			advanceArmy(sim, army, dayNumber)
+		end
+	end
+	for _, armyId in TableUtil.sortedKeys(state.armies) do
+		local army = state.armies[armyId]
+		local house = state.houses[army.houseId]
+		if house then
+			house.armyUpkeepAccrued = EconomyRules.roundGold(house.armyUpkeepAccrued + MilitaryRules.upkeep(army.units, sim.config.Military))
 		end
 	end
 	if dayNumber % sim.config.Military.SupplyTickDays == 0 then
@@ -947,8 +975,8 @@ function Military.processMonth(sim: SimContext, _monthIndex: number)
 	for _, provinceId in Content.provinceIds do
 		local province = state.provinces[provinceId]
 		if province then
-			local leviesMax = MilitaryRules.levyMax(provinceId, province.development, config)
-			local garrisonMax = MilitaryRules.garrisonMax(provinceId, province.development, config)
+			local leviesMax = MilitaryRules.provinceLevyMax(province, config)
+			local garrisonMax = MilitaryRules.provinceGarrisonMax(province, config)
 			local levies = math.min(province.levies, leviesMax)
 			local garrison = math.min(province.garrisonTroops, garrisonMax)
 			if Military.holdsProvince(province, province.ownerHouseId) then

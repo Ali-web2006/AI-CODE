@@ -6,6 +6,7 @@
 	Authoritative fields (see docs/ARCHITECTURE.md §State):
 	  clock.date / clock.lastProcessedMonthIndex   campaign time and the monthly-processing guard
 	  houses[id].treasury                           gold; changed only by Economy and commands
+	  houses[id].armyUpkeepAccrued                  accrued daily by Military, charged by Economy
 	  provinces[id].ownerHouseId / occupierHouseId  legal owner vs. military occupier
 	  provinces[id].development                     changed only by the DevelopProvince operation
 	  relations[key].score                          changed only by Diplomacy
@@ -94,6 +95,7 @@ function CampaignState.createFromBookmark(bookmark: GameTypes.BookmarkDefinition
 			rulerId = setup.rulerId,
 			extinct = false,
 			ledger = {},
+			armyUpkeepAccrued = 0,
 			ai = {
 				-- First evaluation happens at the end of the first month at the earliest.
 				nextEvaluationMonth = startMonthIndex + CampaignState.initialAIOffset(houseId, options.aiConfig.EvaluationIntervalMonths),
@@ -104,14 +106,18 @@ function CampaignState.createFromBookmark(bookmark: GameTypes.BookmarkDefinition
 	local provinces: { [string]: GameTypes.ProvinceState } = {}
 	for _, provinceId in Content.provinceIds do
 		local setup = bookmark.provinces[provinceId]
-		provinces[provinceId] = {
+		local province: GameTypes.ProvinceState = {
 			id = provinceId,
 			ownerHouseId = setup.ownerHouseId,
 			occupierHouseId = nil,
 			development = setup.development,
-			levies = MilitaryRules.levyMax(provinceId, setup.development, options.militaryConfig),
-			garrisonTroops = MilitaryRules.garrisonMax(provinceId, setup.development, options.militaryConfig),
+			levies = 0,
+			garrisonTroops = 0,
 		}
+		-- Pools start full.
+		province.levies = MilitaryRules.provinceLevyMax(province, options.militaryConfig)
+		province.garrisonTroops = MilitaryRules.provinceGarrisonMax(province, options.militaryConfig)
+		provinces[provinceId] = province
 	end
 
 	local characters: { [string]: GameTypes.CharacterState } = {}

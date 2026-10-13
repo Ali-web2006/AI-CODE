@@ -11,15 +11,23 @@
 	               scale units, so panning and zooming need no per-element work:
 	                 borders (Path2D: constant on-screen width), hover glow, selection and
 	                 own-province outlines, crests (SigilView), location icons and labels,
-	                 great-house and feature labels
+	                 great-house and feature labels, then army routes and army tokens
+	                 (UI/ArmyLayer, mounted here with a small surface interface)
 	  Overlay      map modes, legend, sub-territory border toggle, zoom buttons
 
 	Interaction: hovering a sub-territory brightens it, outlines its whole region and shows a
 	tooltip; clicking it (or a location) selects its province through options.onSelect; clicking
-	the sea clears the selection. Drag or touch to pan, wheel or pinch to zoom, within limits.
+	the sea clears the selection. Clicking an army token selects the army (options.onSelectArmy).
+	A right-click on land or a location reports the province under the pointer through
+	options.onCommand, and a right-click on a token reports that army (options.onCommandArmy);
+	UIController turns both into march orders. A token is drawn raised above its army's point,
+	so the land under it is not where the army stands and is never the target. Drag or touch to
+	pan, wheel or pinch to zoom, within limits.
 
 	Map modes: "houses" (the great houses' palettes, the default), "realm" (current owner),
-	"relations" (towards your house), "wealth" (income) and "terrain".
+	"relations" (towards your house), "wealth" (income), "terrain" and "military" (men present:
+	the garrison plus the armies standing in each province, with a garrison label under every
+	holding icon).
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -29,6 +37,7 @@ local Content = require(ReplicatedStorage.Shared.Data.Content)
 local GameConfig = require(ReplicatedStorage.Shared.Config.GameConfig)
 local MapData = require(ReplicatedStorage.Shared.Data.World.MapData)
 local Polygon = require(ReplicatedStorage.Shared.Util.Polygon)
+local ArmyLayer = require(script.Parent.Parent.UI.ArmyLayer)
 local FlatTriangles = require(script.Parent.Parent.UI.FlatTriangles)
 local Format = require(script.Parent.Parent.UI.Format)
 local MapIcons = require(script.Parent.Parent.UI.MapIcons)
@@ -42,12 +51,18 @@ local ReplicaStore = require(script.Parent.ReplicaStore)
 local Colors = Theme.Colors
 local Fonts = Theme.Fonts
 
-export type MapMode = "houses" | "realm" | "relations" | "wealth" | "terrain"
+export type MapMode = "houses" | "realm" | "relations" | "wealth" | "terrain" | "military"
 
 export type Options = {
 	store: ReplicaStore.ReplicaStore,
 	getScale: () -> number,
 	onSelect: (provinceId: string?) -> (),
+	-- A click on an army token.
+	onSelectArmy: (armyId: string) -> (),
+	-- A right-click on land: the province under the pointer (a march order for the selected army).
+	onCommand: (provinceId: string) -> (),
+	-- A right-click on an army token (a march order to where that army stands).
+	onCommandArmy: (armyId: string) -> (),
 }
 
 -- Path2D strokes are opaque (scripts cannot set Path2D.Transparency).
@@ -64,7 +79,7 @@ type Sub = {
 }
 
 type HouseLabel = { holder: Frame, house: TextLabel, name: TextLabel }
-type LocationNode = { button: TextButton, label: TextLabel }
+type LocationNode = { button: TextButton, label: TextLabel, garrison: TextLabel?, provinceId: string? }
 type FeatureLabel = { label: TextLabel }
 
 local MapController = {}
@@ -107,6 +122,12 @@ local overLocation: TextButton? = nil -- location icon under the pointer (its to
 local subBordersVisible = true
 local mineKey = ""
 local maxIncome = 1
+local menByProvince: { [string]: number } = {} -- military mode: garrison plus armies standing there
+local maxMen = 1
+
+-- Military mode ramp, from few men to many.
+local MEN_FEW = Color3.fromRGB(236, 226, 196)
+local MEN_MANY = Color3.fromRGB(128, 30, 34)
 
 -- Helpers ----------------------------------------------------------------------------------------
 
@@ -182,6 +203,36 @@ local function recomputeMaxIncome()
 	end
 end
 
+--[[
+	Men present in every province, for the military mode: its garrison plus the troops of the
+	armies located there (an army on the road counts where it set out from). Returns true when any
+	count changed, so the map is recoloured only then.
+]]
+local function recomputeMen(): boolean
+	local store = options.store
+	local counts: { [string]: number } = {}
+	for _, provinceId in Content.provinceIds do
+		local view = store:province(provinceId)
+		counts[provinceId] = if view then view.garrisonTroops or 0 else 0
+	end
+	for _, army in store.campaign.armies or {} do
+		if counts[army.locationId] ~= nil then
+			counts[army.locationId] += army.troops or 0
+		end
+	end
+	local changed = false
+	local highest = 1
+	for _, provinceId in Content.provinceIds do
+		if counts[provinceId] ~= menByProvince[provinceId] then
+			changed = true
+		end
+		highest = math.max(highest, counts[provinceId])
+	end
+	menByProvince = counts
+	maxMen = highest
+	return changed
+end
+
 local function modeColor(sub: Sub): Color3
 	if mode == "houses" then
 		return sub.baseColor
@@ -209,6 +260,9 @@ local function modeColor(sub: Sub): Color3
 	elseif mode == "wealth" then
 		local t = math.clamp((view.income or 0) / maxIncome, 0, 1)
 		color = Theme.mix(Color3.fromRGB(236, 226, 196), Color3.fromRGB(120, 80, 20), t ^ 0.8)
+	elseif mode == "military" then
+		local t = math.clamp((menByProvince[provinceId] or 0) / maxMen, 0, 1)
+		color = Theme.mix(MEN_FEW, MEN_MANY, t ^ 0.7)
 	else
 		local terrain = Content.terrains[Content.provinces[provinceId].terrainId]
 		color = Theme.fromRGB(terrain.color)
@@ -397,6 +451,25 @@ local function styleForZoom()
 	for _, node in locations do
 		node.button.Visible = showIcons
 		node.label.Visible = showLabels
+		local garrison = node.garrison
+		if garrison then
+			-- Under the holding's name when names are shown, else right under the icon.
+			garrison.Position = UDim2.new(0.5, 0, 1, if showLabels then MapStyle.GarrisonBelowName else 1)
+			garrison.Visible = mode == "military"
+		end
+	end
+	ArmyLayer.setZoom(zoom)
+end
+
+-- Military mode: "Garrison 1,800" under every holding icon (the icons appear from LocationIconZoom).
+local function updateGarrisonLabels()
+	for _, node in locations do
+		local garrison = node.garrison
+		if garrison and node.provinceId then
+			local view = options.store:province(node.provinceId)
+			garrison.Text = `Garrison {Format.troops(if view then view.garrisonTroops or 0 else 0)}`
+			garrison.Visible = mode == "military"
+		end
 	end
 end
 
@@ -433,26 +506,61 @@ function MapController.fitToView()
 	applyView()
 end
 
+-- Centres the view on a map point, zooming in to at least 0.8 unless a zoom is given.
+local function focusPoint(point: Vector2, targetZoom: number?)
+	local size = viewSize()
+	zoom = math.clamp(targetZoom or math.max(zoom, 0.8), minZoom(), MapStyle.MaxZoom)
+	offset = size / 2 - point * zoom
+	applyView()
+end
+
 function MapController.focusProvince(provinceId: string, targetZoom: number?)
 	local definition = Content.provinces[provinceId]
 	if not definition then
 		return
 	end
-	local size = viewSize()
-	zoom = math.clamp(targetZoom or math.max(zoom, 0.8), minZoom(), MapStyle.MaxZoom)
-	offset = size / 2 - Vector2.new(definition.position.x, definition.position.y) * zoom
-	applyView()
+	focusPoint(Vector2.new(definition.position.x, definition.position.y), targetZoom)
+end
+
+-- Centres the view on an army (where it is today, also on the road).
+function MapController.focusArmy(armyId: string)
+	local point = ArmyLayer.pointOf(armyId)
+	if point then
+		focusPoint(point, nil)
+	end
 end
 
 -- Input ------------------------------------------------------------------------------------------
 
 local beginDrag: (input: InputObject, onLocation: boolean?) -> ()
 
+-- Pointer travel of the current or last press, in virtual px. A press that moved at least
+-- CLICK_SLOP is a drag: releasing it over a token or a holding icon (which moved along with the
+-- map) must not count as a click on it.
+local CLICK_SLOP = 4
+local pressTravel = 0
+
+local function wasClick(): boolean
+	return pressTravel < CLICK_SLOP
+end
+
+-- A right-click (mouse button 2) gives an order at the pointer: the province under it, if land.
+-- Other inputs are ignored. Touch has no right-click; the army panel's Move button covers it.
+local function rightClick(input: InputObject)
+	if input.UserInputType ~= Enum.UserInputType.MouseButton2 then
+		return
+	end
+	local point = mapPointAt(input.Position)
+	local sub = subAt(point.X, point.Y)
+	if sub then
+		options.onCommand(sub.data.provinceId)
+	end
+end
+
 local function bindInput(dragCatcher: TextButton)
 	local dragging = false
 	local dragInput: InputObject? = nil
 	local lastPosition = Vector2.zero
-	local travelled = 0
 	local pinching = false
 	local pinchStartZoom = zoom
 	local pressedLocation = false -- the press started on a location icon, which selects on its own
@@ -465,7 +573,7 @@ local function bindInput(dragCatcher: TextButton)
 			dragging = true
 			dragInput = input
 			lastPosition = Vector2.new(input.Position.X, input.Position.Y)
-			travelled = 0
+			pressTravel = 0
 			pressedLocation = onLocation == true
 			if input.UserInputType == Enum.UserInputType.Touch then
 				local point = mapPointAt(input.Position)
@@ -475,6 +583,7 @@ local function bindInput(dragCatcher: TextButton)
 	end
 	dragCatcher.InputBegan:Connect(function(input)
 		beginDrag(input, false)
+		rightClick(input)
 	end)
 
 	UserInputService.InputChanged:Connect(function(input)
@@ -485,7 +594,7 @@ local function bindInput(dragCatcher: TextButton)
 				local position = Vector2.new(input.Position.X, input.Position.Y)
 				local delta = (position - lastPosition) / options.getScale()
 				lastPosition = position
-				travelled += delta.Magnitude
+				pressTravel += delta.Magnitude
 				offset += delta
 				applyView()
 			end
@@ -510,7 +619,7 @@ local function bindInput(dragCatcher: TextButton)
 			and dragInput.UserInputType == Enum.UserInputType.MouseButton1) then
 			dragging = false
 			dragInput = nil
-			if travelled < 4 and not pinching and not pressedLocation then
+			if wasClick() and not pinching and not pressedLocation then
 				-- A click selects the province under the pointer; the sea clears the selection.
 				local point = mapPointAt(input.Position)
 				local sub = subAt(point.X, point.Y)
@@ -764,9 +873,32 @@ local function buildLocations()
 		label.AnchorPoint = Vector2.new(0.5, 0)
 		label.Position = UDim2.new(0.5, 0, 1, 1)
 		label.ZIndex = 4
+		-- Military mode only: the province's garrison, under the icon (and its name when shown).
+		local garrison: TextLabel? = nil
+		if provinceId then
+			local garrisonLabel = textLabel({
+				Name = "Garrison",
+				Text = "",
+				TextSize = MapStyle.GarrisonTextSize,
+				FontFace = Fonts.BodyBold,
+				TextColor3 = MapStyle.Ink,
+				HaloThickness = 1.2,
+				Parent = button,
+			}, MapStyle.Paper)
+			garrisonLabel.AnchorPoint = Vector2.new(0.5, 0)
+			garrisonLabel.Position = UDim2.new(0.5, 0, 1, 1)
+			garrisonLabel.ZIndex = 4
+			garrisonLabel.Visible = false
+			garrison = garrisonLabel
+		end
 
 		button.InputBegan:Connect(function(input)
 			beginDrag(input, true)
+			if provinceId and input.UserInputType == Enum.UserInputType.MouseButton2 then
+				options.onCommand(provinceId)
+			elseif not provinceId then
+				rightClick(input)
+			end
 		end)
 		button.MouseEnter:Connect(function()
 			overLocation = button
@@ -777,15 +909,42 @@ local function buildLocations()
 			end
 		end)
 		button.Activated:Connect(function()
-			if provinceId then
+			if provinceId and wasClick() then
 				options.onSelect(provinceId)
 			end
 		end)
 		Tooltip.bind(button, function()
 			return locationTooltip(location)
 		end)
-		table.insert(locations, { button = button, label = label })
+		table.insert(locations, { button = button, label = label, garrison = garrison, provinceId = provinceId })
 	end
+end
+
+-- Army tokens and routes, drawn by UI/ArmyLayer on canvas layers above the labels.
+local function buildArmies()
+	ArmyLayer.mount({
+		store = options.store,
+		layer = layer,
+		scalePosition = scalePosition,
+		beginDrag = function(input: InputObject, onLocation: boolean?)
+			beginDrag(input, onLocation)
+		end,
+		commandArmy = function(armyId: string)
+			options.onCommandArmy(armyId)
+		end,
+		hover = function(button: TextButton, inside: boolean)
+			if inside then
+				overLocation = button
+			elseif overLocation == button then
+				overLocation = nil
+			end
+		end,
+		onSelectArmy = function(armyId: string)
+			if wasClick() then
+				options.onSelectArmy(armyId)
+			end
+		end,
+	})
 end
 
 -- Overlay ----------------------------------------------------------------------------------------
@@ -824,6 +983,10 @@ local function rebuildLegend()
 	elseif mode == "wealth" then
 		legendRow("Poor", Color3.fromRGB(236, 226, 196), 1)
 		legendRow(`Rich ({Format.gold(maxIncome)} gold/month)`, Color3.fromRGB(120, 80, 20), 2)
+	elseif mode == "military" then
+		legendRow("Few men", MEN_FEW, 1)
+		legendRow(`Many men ({Format.troops(maxMen)})`, MEN_MANY, 2)
+		UI.label({ text = "Men present: the garrison plus the armies standing in the province. Zoom in to read each garrison.", size = Theme.TextSize.Small, wrap = true, color = Colors.Ink, order = 3, parent = legend })
 	else
 		local order = 0
 		for _, terrain in Content.raw.terrains do
@@ -872,7 +1035,8 @@ local function buildOverlay()
 		{ id = "realm", label = "Realm", tip = "Who holds each province today." },
 		{ id = "relations", label = "Relations", tip = "How each owner regards your house." },
 		{ id = "wealth", label = "Wealth", tip = "Monthly income of each province." },
-		{ id = "terrain", label = "Terrain", tip = "Terrain affects income and development cost." },
+		{ id = "terrain", label = "Terrain", tip = "Terrain affects income, development cost and marching time." },
+		{ id = "military", label = "Military", tip = "Men present in each province: its garrison and the armies standing there." },
 	}
 	for index, info in modeInfo do
 		local button = UI.button({
@@ -885,6 +1049,8 @@ local function buildOverlay()
 				MapController.setMode(info.id)
 			end,
 		})
+		-- "Military" is also the name of a navigation tab: the name tells the two buttons apart.
+		button.Name = `Mode_{info.id}`
 		Tooltip.setText(button, info.tip)
 		modeButtons[info.id] = button
 	end
@@ -1004,6 +1170,7 @@ function MapController.mount(parent: Frame, mapOptions: Options)
 	bindInput(dragCatcher)
 	buildCrestsAndLabels()
 	buildLocations()
+	buildArmies()
 	buildOverlay()
 
 	container:GetPropertyChangedSignal("AbsoluteSize"):Connect(applyView)
@@ -1017,9 +1184,11 @@ function MapController.setMode(newMode: MapMode)
 		UI.setSelected(button, id == mode)
 	end
 	recomputeMaxIncome()
+	recomputeMen()
 	rebuildLegend()
 	recolorAll()
 	rebuildMine()
+	updateGarrisonLabels()
 end
 
 function MapController.select(provinceId: string?)
@@ -1027,8 +1196,14 @@ function MapController.select(provinceId: string?)
 	rebuildSelection()
 end
 
+-- Highlights an army's token and shows its route (nil clears the army selection).
+function MapController.selectArmy(armyId: string?)
+	ArmyLayer.select(armyId)
+end
+
 -- Applies replicated changes: only affected provinces are recoloured unless the mode depends on
--- data that changed globally (relations, the player's house, full resync).
+-- data that changed globally (relations, men present, the player's house, full resync). Army
+-- tokens and routes follow every change (and every day, while armies march).
 function MapController.refresh(changes: ReplicaStore.ChangeSet)
 	local all = changes.full or changes.session
 	if mode == "relations" and next(changes.relations) ~= nil then
@@ -1038,6 +1213,15 @@ function MapController.refresh(changes: ReplicaStore.ChangeSet)
 		recomputeMaxIncome()
 		rebuildLegend()
 		all = true
+	end
+	if mode == "military" and (all or next(changes.provinces) ~= nil or next(changes.armies) ~= nil) then
+		if recomputeMen() or all then
+			rebuildLegend()
+			all = true
+		end
+		if all or next(changes.provinces) ~= nil then
+			updateGarrisonLabels()
+		end
 	end
 	if all then
 		recolorAll()
@@ -1049,6 +1233,7 @@ function MapController.refresh(changes: ReplicaStore.ChangeSet)
 	if all or next(changes.provinces) ~= nil then
 		rebuildMine()
 	end
+	ArmyLayer.refresh(changes)
 end
 
 return MapController

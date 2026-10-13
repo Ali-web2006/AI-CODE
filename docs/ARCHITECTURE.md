@@ -81,7 +81,7 @@ validation.
 | Mutable campaign state | `CampaignState` (server) | Plain tables keyed by stable string ids; no Instances; serializable. |
 | Player session state | `SessionRegistry` (server) | Player-to-house control, host, reconnect reservations. Not saved with the campaign. |
 | Runtime-only helpers | `Simulation` | Clock accumulator, change journal. Never saved. |
-| Presentation state | `UIController` (client) | Selected province, active tab, panel visibility. |
+| Presentation state | `UIController` (client) | Selected province and army, pending move order, active tab, panel visibility. |
 | Persisted data | DataStore slot per host | Versioned save record (§7). |
 
 Entity separation: realm, house, character, province and (in later phases) title are distinct
@@ -97,8 +97,9 @@ content and only mutable fields in state.
 | `clock.speed`, `clock.paused` | `Simulation.setSpeed/setPaused` via host policy |
 | `houses[id].treasury` | `Economy.processMonth` (army upkeep included), `Economy.develop`, `Diplomacy.applyImproveRelations` |
 | `houses[id].ledger` | `Economy.processMonth` |
-| `provinces[id].ownerHouseId` | bookmark (Phase 5 adds conquest) |
-| `provinces[id].occupierHouseId` | reserved for Phase 5 (occupied provinces yield nothing to the owner) |
+| `houses[id].armyUpkeepAccrued` | `Military.processDay` (each army adds its monthly upkeep every day), `Economy.processMonth` (charges it divided by the days of the month, then resets it) |
+| `provinces[id].ownerHouseId` | bookmark (Phase 2 adds conquest) |
+| `provinces[id].occupierHouseId` | reserved for Phase 2 (occupied provinces yield nothing to the owner) |
 | `provinces[id].development` | `Economy.develop` |
 | `provinces[id].levies`, `provinces[id].garrisonTroops` | `Military`: raising empties a levy pool, disbanding refills it, `Military.processMonth` replenishes both |
 | `armies[id]`, `nextArmySerial` | `Military` commands and `Military.processDay` (movement, merging on arrival, supply, attrition, desertion) |
@@ -110,8 +111,11 @@ content and only mutable fields in state.
 ### Armies
 
 An `ArmyState` (`GameTypes`) is keyed `army_<serial>`; the serial comes from `nextArmySerial` in
-state, so ids are deterministic and never reused. It holds its house, origin (which names it),
-commander, location, units (`unitId -> men`), morale, supply, flags and its movement:
+state, so ids are deterministic and never reused within a campaign. Every campaign starts at
+`army_1` and a loaded save restores its own serial, so after a load an id can name a different
+army (even another house's) than it did before: clients must not carry an army id across a full
+snapshot. It holds its house, origin (which names it), commander, location, units
+(`unitId -> men`), morale, supply, flags and its movement:
 
 * `route` is the list of remaining stops; `route[1]` is the next province.
 * `legStartDay` and `legEndDay` are `CalendarDate.toDayNumber` values of the current leg. Both set
@@ -119,8 +123,10 @@ commander, location, units (`unitId -> men`), morale, supply, flags and its move
   for free ships; both nil with an empty route means idle.
 
 Nothing changes while an army marches, so it is marked dirty only when a leg starts or ends, when
-it merges, or when supply, morale or men change (every `SupplyTickDays`). Clients interpolate the
-position from the leg days and `clock.dayNumber`. Ships are derived, not stored: a house's fleet
+it merges, or when supply, morale or men change (every `SupplyTickDays`). Its house is marked too
+when the house view can change (troops, upkeep, ships in use), but not for a supply tick that
+changes only supply or morale. Clients interpolate the position from the leg days and
+`clock.dayNumber`. Ships are derived, not stored: a house's fleet
 is the sum of `MilitaryRules.ships` over the provinces it holds, and ships in use are those
 carrying its armies on sea legs. Commanders are characters of the house, at most one army each.
 
@@ -139,10 +145,12 @@ deliberately not stored here.
 * A server hitch can produce at most `MaxDaysPerStep` (10) days. Any backlog beyond that is
   discarded, so there is no catch-up spiral.
 * `Simulation.advanceDay` advances the `CalendarDate` (365-day calendar, no leap years), runs the
-  daily systems (`Military.processDay`: arrivals, departures, gathering, and every 5 days supply,
-  morale and attrition) and, when the month changes, runs the monthly systems for the month that
-  ended: Economy (army upkeep included), Military (levy and garrison refill), Diplomacy drift, AI.
-  On the first day of a month the daily systems run before the monthly ones.
+  daily systems (`Military.processDay`: arrivals, departures, gathering, a day of army upkeep
+  accrued, and every 5 days supply, morale and attrition) and, when the month changes, runs the
+  monthly systems for the month that ended: Economy (the accrued army upkeep included), Military
+  (levy and garrison refill), Diplomacy drift, AI. On the first day of a month the daily systems
+  run before the monthly ones, so a settlement covers the days from the 2nd of its month to the
+  1st of the next: as many days as the month has.
 * The monthly guard: `lastProcessedMonthIndex` increases exactly once per month. Processing a month
   at or before it is refused and logged. Scenario D verifies this under constant speed changes,
   pauses and hitches.
@@ -198,9 +206,10 @@ them. Views added for the military:
   the gold upkeep of the garrison)
 * house views add `budget.armyUpkeep` and `military = { raised, levies, leviesMax, garrisons,
   garrisonsMax, total, ships, shipsInUse, armies }`
-* the clock view adds `dayNumber` A gap, or a `resync` marker (sent after a load), makes the client fetch a
-full snapshot. Flushes are batched every `ReplicationInterval` (0.1 s) and forced right after each
-player request.
+* the clock view adds `dayNumber`, the time base of `legStartDay`/`legEndDay`
+
+A gap, or a `resync` marker (sent after a load), makes the client fetch a full snapshot. Flushes
+are batched every `ReplicationInterval` (0.1 s) and forced right after each player request.
 
 ## 6. Security
 
@@ -238,7 +247,8 @@ Save record (schema version 2, `CampaignSerializer`):
   summary = { campaignId, bookmarkId, date, hostHouseId },
   campaign = { campaignId, bookmarkId, seed, rngState, nextArmySerial,
                clock = { date, speed, lastProcessedMonthIndex },
-               houses = { [id] = { treasury, rulerId, extinct, ledger, aiNextEvaluationMonth } },
+               houses = { [id] = { treasury, rulerId, extinct, ledger, aiNextEvaluationMonth,
+                                   armyUpkeepAccrued } },
                provinces = { [id] = { ownerHouseId, occupierHouseId?, development, levies,
                                       garrisonTroops } },
                characters = { [id] = { full character record } },
@@ -254,12 +264,17 @@ Save record (schema version 2, `CampaignSerializer`):
   refused. `MIGRATIONS[1]` adds an empty `armies` set and `nextArmySerial = 1`; it touches only
   top-level keys, because the campaign table is not yet validated. Schema 1 provinces have no
   levy or garrison pools: they load full, sized to the saved development, without a warning. From
-  schema 2 on the pools are required.
+  schema 2 on the pools are required. `armyUpkeepAccrued` was added to schema 2 later: a save
+  without it loads with 0.
 * **Content drift:**
   * Entities added to content after a save are initialised from the bookmark, with a warning.
   * Entities that no longer exist make the load fail.
   * Armies are not content: the saved set replaces the bookmark's (empty) one, and an army that
     names an unknown house, province, unit or character makes the load fail.
+  * Balance changes: when a retune has lowered a maximum since the save was made, a levy or
+    garrison pool above its province's current maximum, or an army's morale or supply above
+    `MoraleMax` or `SupplyMax`, is lowered to the maximum with a warning, as
+    `Military.processMonth` does in play. Negative or fractional values still fail the load.
 * **Concurrency:** every write uses `UpdateAsync` with an optimistic `revision` check inside the
   transform. A server that last saw revision 3 cannot overwrite revision 4; it gets `SaveConflict`.
 * **Transient failures:** bounded retries with 1, 2 and 4 second backoff. A request budget check
@@ -323,7 +338,29 @@ field by field).
     province through `onSelect`, exactly as the old province markers did.
   * Drawing rules (border weights, zoom thresholds, crest and label sizes) live in
     `UI/MapStyle`; `tools/render_map_preview.py` mirrors them.
-  * Five map modes: houses, realm, relations, wealth, terrain.
+  * Six map modes: houses, realm, relations, wealth, terrain and military. The mode buttons are
+    named `Mode_<id>`, because "Military" is also a navigation tab.
+  * Armies: `UI/ArmyLayer`, mounted by `MapController` through a small surface interface (layer
+    factory, scale positions, drag start, army command, hover, selection callback), draws a token
+    per army and the dotted routes on two canvas layers above the labels. Tokens are positioned
+    from the replicated leg (`legStartDay`/`legEndDay`) and `clockView.dayNumber`: on each clock
+    update they tween linearly to their point a few days ahead, and snap when paused or after a
+    full snapshot. Each token remembers its house; a full snapshot or a session change (a load,
+    or a return from the lobby, whose snapshots never reach the map) rebuilds tokens whose id now
+    belongs to another house and removes those of armies that no longer exist. Routes are redrawn
+    in place when the zoom bucket changes, reusing their dot frames. A right-click on land reports
+    the province through `onCommand`, a right-click on a token reports that army through
+    `onCommandArmy` (its province is the target, never the land under the raised banner);
+    UIController keeps the selected army and the pending move order and turns clicks into
+    `MoveArmy`. Move mode ends when the Military tab is left or the panel hidden, and a full
+    snapshot clears the selection and the pending order. A press that travelled a few pixels is a
+    drag, so releasing it over a token or a holding icon (which moved with the map) is not taken as
+    a click on it.
+  * Panels redraw only for changes they show: a supply tick (morale and supply only, every few
+    days) moves the Military tab's meters in place (`ArmyInfo.structuralKey` tells it apart), so
+    a button under the pointer is not destroyed between press and release.
+    `UI/ArmyInfo` words orders, arrival estimates and commanders for the map, the Military tab
+    (`UI/ArmyPanel`) and the province panel, using the shared `MovementRules`.
 * `tools/mapgen/generate_map.py` regenerates the outline block of `MapData` from the reference
   map; `tools/mapgen/build_sigils.py` regenerates `SigilArt` from `tools/mapgen/sigils/*.py`.
 
@@ -343,11 +380,11 @@ Each long-term feature, and where it attaches without replacing the foundation:
 |---|---|
 | More houses, provinces, bookmarks, maps | Data files only; `ContentValidator` checks them; saves initialise added content from the bookmark |
 | Characters, births, deaths, marriages, inheritance | `CampaignState.characters` is already state-owned and saved in full; add daily/monthly systems and commands; succession rules as data |
-| Titles, vassals, claims, governments | New `titles` collection in state + `TitleDefinitions`; houses keep identity; schema migration 2→3 |
+| Titles, vassals, claims, governments | New `titles` collection in state + `TitleDefinitions`; houses keep identity; a schema migration |
 | Treaties (alliances, NAPs, marriages, war) | Attach to the symmetric `RelationState` record per pair; commands follow the `check*`/`apply*` pattern |
 | Character opinions, traits, secrets, schemes | Directional opinion store separate from house relations; schemes as state entities advanced by a daily system |
 | War, battles, sieges, peace | Armies, levies, garrisons, movement and supply exist (`Military`); unit stats already carry counters, siege damage and terrain, region and situation multipliers; `occupierHouseId` separates occupation from ownership; battles and sieges become further daily systems after `Military.processDay`; military AI is a new candidate generator |
-| Buildings, trade, deeper economy | `EconomyRules.computeHouseBudget` takes per-province lines; add modifiers there |
+| Buildings, trade, deeper economy | `EconomyRules.computeHouseBudget` takes per-province lines; add modifiers there. Levy and garrison maximums: `MilitaryRules.poolModifiers(province)` (identity today) feeds every pool maximum through `provinceLevyMax`/`provinceGarrisonMax`, so buildings that raise levies or garrisons change only that function |
 | Smarter AI | Add candidate generators to `AIDirector`; evaluation budget already bounded |
 | Hidden information | `Snapshot` builds every view per viewer; filter there |
-| Persistent shared campaigns | Repository and serializer are campaign-shaped; add campaign-keyed slots and session locks (Phase 7) |
+| Persistent shared campaigns | Repository and serializer are campaign-shaped; add campaign-keyed slots and session locks (Phase 9) |

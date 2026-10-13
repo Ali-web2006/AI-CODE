@@ -11,21 +11,42 @@
 	viewport (clamped). When the virtual width is narrow (phones, small windows) the compact layout
 	narrows the side panel and the navigation rail.
 
-	Presentation state kept here: selected province, active tab, panel visibility. Game state is
-	read from the ReplicaStore and changed only by server commands.
+	Presentation state kept here: selected province, selected army, a pending move order, active
+	tab, panel visibility. Game state is read from the ReplicaStore and changed only by server
+	commands.
+
+	Army orders: the army panel's Move button starts move mode for one of the player's armies.
+	While it is on, a click on land (or a holding icon) sends MoveArmy to that province instead of
+	selecting it, a click on another army's token sends it where that army stands, and a
+	right-click, Esc (or the Roblox menu opening, which Esc also does) or a click on the army's
+	own token cancels. Move mode lives only while the Military tab shows it: switching to another
+	tab, selecting a province from a panel or hiding the panel cancels it too. Outside move mode a
+	right-click on land marches the selected army there, if it is the player's, and so does a
+	right-click on another army's token: to the province that army stands in, as a click on it
+	in move mode would (never to the land drawn under the raised banner). A left click on the map
+	selects the province (or clears it, on the sea) and lets go of the army, so no army stays
+	selected out of sight. Selecting provinces from the panels keeps the army selected.
+
+	A full snapshot (a campaign load, or a resync after a missed delta) lets go of the selected
+	army and any pending order: a loaded campaign reuses army ids for different armies.
 ]]
 
+local GuiService = game:GetService("GuiService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local StarterGui = game:GetService("StarterGui")
+local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 local Content = require(ReplicatedStorage.Shared.Data.Content)
 local EventText = require(ReplicatedStorage.Shared.Text.EventText)
+local Protocol = require(ReplicatedStorage.Shared.Net.Protocol)
 local ActionController = require(script.Parent.ActionController)
 local MapController = require(script.Parent.MapController)
 local StateController = require(script.Parent.StateController)
 local UIFolder = script.Parent.Parent.UI
+local ArmyInfo = require(UIFolder.ArmyInfo)
+local ArmyPanel = require(UIFolder.ArmyPanel)
 local CampaignMenu = require(UIFolder.CampaignMenu)
 local ChroniclePanel = require(UIFolder.ChroniclePanel)
 local DiplomacyPanel = require(UIFolder.DiplomacyPanel)
@@ -48,6 +69,8 @@ local store = StateController.store
 local scale = 1
 local compact = false
 local selectedProvinceId: string? = nil
+local selectedArmyId: string? = nil
+local pendingMoveArmyId: string? = nil -- move mode: this army marches to the next province clicked
 local activeTab: UIContext.Tab = "map"
 local panelHidden = false
 
@@ -107,6 +130,10 @@ function UIController.start()
 	-- Context shared with every screen --------------------------------------------------------
 	local notifications: Notifications.Notifications
 	local selectProvince: (string?, boolean?) -> ()
+	local selectArmy: (string?, boolean?) -> ()
+	local beginMoveOrder: (string) -> ()
+	local cancelMoveOrder: (boolean) -> ()
+	local sendMove: (string, string) -> ()
 	local showTab: (UIContext.Tab) -> ()
 	local focusHouse: (string) -> ()
 
@@ -122,7 +149,23 @@ function UIController.start()
 		selectedProvince = function()
 			return selectedProvinceId
 		end,
+		selectArmy = function(armyId: string?, focus: boolean?)
+			selectArmy(armyId, focus)
+		end,
+		selectedArmy = function()
+			return selectedArmyId
+		end,
+		beginMoveOrder = function(armyId: string)
+			beginMoveOrder(armyId)
+		end,
+		cancelMoveOrder = function()
+			cancelMoveOrder(true)
+		end,
+		pendingMoveOrder = function()
+			return pendingMoveArmyId
+		end,
 		showTab = function(tab: UIContext.Tab)
+			panelHidden = false
 			showTab(tab)
 		end,
 		focusHouse = function(houseId: string)
@@ -181,17 +224,72 @@ function UIController.start()
 			return scale
 		end,
 		onSelect = function(provinceId)
+			local armyId = pendingMoveArmyId
+			if armyId then
+				-- Move mode: the click picks the destination instead of selecting.
+				if provinceId then
+					sendMove(armyId, provinceId)
+				else
+					notifications.toast("Armies march to provinces: click land, or press Esc to cancel the order.", "info")
+				end
+				return
+			end
 			selectProvince(provinceId, false)
+			-- A plain click on the map also lets go of the selected army (right-clicks would
+			-- otherwise keep ordering it while its panel is hidden).
+			if selectedArmyId then
+				selectArmy(nil, false)
+			end
+		end,
+		onSelectArmy = function(armyId)
+			local pending = pendingMoveArmyId
+			if pending then
+				if armyId == pending then
+					cancelMoveOrder(true)
+				else
+					-- March to where the other army stands (an army on the road: where it set out from).
+					local other = store:army(armyId)
+					if other then
+						sendMove(pending, other.locationId :: string)
+					end
+				end
+				return
+			end
+			selectArmy(armyId, false)
+		end,
+		onCommand = function(provinceId)
+			if pendingMoveArmyId then
+				cancelMoveOrder(true)
+				return
+			end
+			local army = if selectedArmyId then store:army(selectedArmyId) else nil
+			if army and army.houseId == store:myHouseId() then
+				sendMove(army.id :: string, provinceId)
+			end
+		end,
+		onCommandArmy = function(armyId)
+			if pendingMoveArmyId then
+				cancelMoveOrder(true)
+				return
+			end
+			-- The same target as a click on that token in move mode: where the army stands.
+			local army = if selectedArmyId then store:army(selectedArmyId) else nil
+			local other = store:army(armyId)
+			if army and other and armyId ~= selectedArmyId and army.houseId == store:myHouseId() then
+				sendMove(army.id :: string, other.locationId :: string)
+			end
 		end,
 	})
 
 	local provincePanel = ProvincePanel.mount(panelContent, ctx)
 	local realmPanel = RealmPanel.mount(panelContent, ctx)
+	local armyPanel = ArmyPanel.mount(panelContent, ctx)
 	local diplomacyPanel, focusDiplomacy = DiplomacyPanel.mount(panelContent, ctx)
 	local chroniclePanel = ChroniclePanel.mount(panelContent, ctx)
 	local panels: { [UIContext.Tab]: UIContext.Panel } = {
 		map = provincePanel,
 		realm = realmPanel,
+		military = armyPanel,
 		diplomacy = diplomacyPanel,
 		chronicle = chroniclePanel,
 	}
@@ -201,6 +299,7 @@ function UIController.start()
 	local tabs: { { id: UIContext.Tab, label: string, tip: string } } = {
 		{ id = "map", label = "Map", tip = "The map and the selected province." },
 		{ id = "realm", label = "Realm", tip = "Your ruler, family, finances and holdings." },
+		{ id = "military", label = "Military", tip = "Your armies, levies, garrisons and ships." },
 		{ id = "diplomacy", label = "Diplomacy", tip = "Relations with every other house." },
 		{ id = "chronicle", label = "Chronicle", tip = "Everything that has happened." },
 	}
@@ -243,11 +342,19 @@ function UIController.start()
 
 	hideButton.Activated:Connect(function()
 		panelHidden = not panelHidden
+		if panelHidden then
+			-- Its only on-screen hint is in the panel: no hidden move mode.
+			cancelMoveOrder(true)
+		end
 		applyLayout()
 	end)
 
 	showTab = function(tab)
 		activeTab = tab
+		if tab ~= "military" then
+			-- Move mode is shown only in the Military tab; a map click elsewhere must not march.
+			cancelMoveOrder(true)
+		end
 		for id, button in tabButtons do
 			UI.setSelected(button, id == tab)
 		end
@@ -276,6 +383,76 @@ function UIController.start()
 		focusDiplomacy(houseId)
 		showTab("diplomacy")
 	end
+
+	-- Armies and orders ------------------------------------------------------------------------
+	local function refreshArmyPanel()
+		if activeTab == "military" and not panelHidden then
+			armyPanel.setVisible(true)
+		end
+	end
+
+	cancelMoveOrder = function(announce: boolean)
+		if not pendingMoveArmyId then
+			return
+		end
+		pendingMoveArmyId = nil
+		if announce then
+			notifications.toast("Move order cancelled.", "quiet")
+		end
+		refreshArmyPanel()
+	end
+
+	selectArmy = function(armyId: string?, focus: boolean?)
+		if pendingMoveArmyId and pendingMoveArmyId ~= armyId then
+			cancelMoveOrder(true)
+		end
+		selectedArmyId = armyId
+		MapController.selectArmy(armyId)
+		if armyId then
+			if focus then
+				MapController.focusArmy(armyId)
+			end
+			panelHidden = false
+			showTab("military")
+		else
+			refreshArmyPanel()
+		end
+	end
+
+	beginMoveOrder = function(armyId: string)
+		local army = store:army(armyId)
+		if not army or army.houseId ~= store:myHouseId() then
+			return
+		end
+		if selectedArmyId ~= armyId then
+			selectArmy(armyId, false)
+		end
+		pendingMoveArmyId = armyId
+		notifications.toast(`Choose where the {ArmyInfo.name(army)} marches: click a province. Right-click or Esc cancels.`, "info")
+		refreshArmyPanel()
+	end
+
+	sendMove = function(armyId: string, provinceId: string)
+		pendingMoveArmyId = nil
+		ActionController.run(Protocol.Commands.MoveArmy, { armyId = armyId, provinceId = provinceId }, `move:{armyId}`, function(result)
+			if result.ok then
+				-- "The Army of Winterfell marches to Moat Cailin (27 days)."
+				notifications.toast(result.message, "info")
+			end
+		end)
+		refreshArmyPanel()
+	end
+
+	-- Esc cancels move mode. Roblox also opens its own menu on Esc (and may not report the key as
+	-- input at all), so the menu opening cancels the order too.
+	UserInputService.InputBegan:Connect(function(input)
+		if input.KeyCode == Enum.KeyCode.Escape and pendingMoveArmyId then
+			cancelMoveOrder(true)
+		end
+	end)
+	GuiService.MenuOpened:Connect(function()
+		cancelMoveOrder(true)
+	end)
 
 	-- Responsive scaling -----------------------------------------------------------------------
 	local function onViewportChanged()
@@ -361,6 +538,33 @@ function UIController.start()
 	store.changed:Connect(function(changes)
 		if changes.full or changes.session then
 			syncScreen()
+		end
+		-- A full snapshot may reuse an army id for a different army (a loaded campaign restores its
+		-- own id counter): let go of the selection and any pending order rather than command it.
+		if changes.full then
+			pendingMoveArmyId = nil
+			if selectedArmyId then
+				selectedArmyId = nil
+				MapController.selectArmy(nil)
+			end
+		end
+		-- A selected army that joined another on arrival (calling the banners) hands the selection
+		-- to the army it joined; one that merged away, disbanded or deserted is deselected.
+		if selectedArmyId then
+			for _, event in changes.events do
+				local data = event.data
+				if event.kind == "ArmiesMerged" and data and data.mergedId == selectedArmyId and store:army(data.armyId) then
+					selectedArmyId = data.armyId
+					MapController.selectArmy(selectedArmyId)
+				end
+			end
+			if not store:army(selectedArmyId) then
+				selectedArmyId = nil
+				MapController.selectArmy(nil)
+			end
+		end
+		if pendingMoveArmyId and not store:army(pendingMoveArmyId) then
+			pendingMoveArmyId = nil
 		end
 		-- Each view updates in isolation: an error in one must not stop the others refreshing.
 		local function safely(label: string, fn: () -> ())

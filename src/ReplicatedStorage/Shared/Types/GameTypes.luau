@@ -220,7 +220,8 @@ export type UnitDefinition = {
 	defense: number,
 	-- Morale bonus (0..30) added to the army's starting morale, weighted by head count.
 	morale: number,
-	-- Movement multiplier: 1 = men on foot. An army moves at the speed of its slowest unit.
+	-- Movement multiplier: 1 = men on foot. An army moves at the head-count-weighted harmonic
+	-- mean of its units' speeds (MilitaryRules.armySpeed).
 	speed: number,
 	-- Gold upkeep factor: 1 = levy spearmen.
 	upkeep: number,
@@ -264,6 +265,9 @@ export type HouseState = {
 	rulerId: string,
 	extinct: boolean,
 	ledger: { LedgerEntry },
+	-- Army upkeep accrued since the last settlement: every day each army adds its monthly upkeep,
+	-- and the settlement charges the sum divided by the days of the month (gold, >= 0).
+	armyUpkeepAccrued: number,
 	ai: {
 		nextEvaluationMonth: number,
 	},

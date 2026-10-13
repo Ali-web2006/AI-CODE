@@ -66,9 +66,9 @@ local function militaryView(sim: SimContext, houseId: string): { [string]: any }
 	for _, province in CampaignState.ownedProvinces(sim.state, houseId) do
 		if Military.holdsProvince(province, houseId) then
 			levies += province.levies
-			leviesMax += MilitaryRules.levyMax(province.id, province.development, config)
+			leviesMax += MilitaryRules.provinceLevyMax(province, config)
 			garrisons += province.garrisonTroops
-			garrisonsMax += MilitaryRules.garrisonMax(province.id, province.development, config)
+			garrisonsMax += MilitaryRules.provinceGarrisonMax(province, config)
 		end
 	end
 	return {
@@ -138,9 +138,9 @@ function Snapshot.provinceView(sim: SimContext, provinceId: string): { [string]:
 		garrison = roundGold(garrison),
 		administration = roundGold(administration),
 		levies = province.levies,
-		leviesMax = MilitaryRules.levyMax(provinceId, province.development, military),
+		leviesMax = MilitaryRules.provinceLevyMax(province, military),
 		garrisonTroops = province.garrisonTroops,
-		garrisonMax = MilitaryRules.garrisonMax(provinceId, province.development, military),
+		garrisonMax = MilitaryRules.provinceGarrisonMax(province, military),
 		ships = MilitaryRules.ships(provinceId, province.development),
 	}
 end

@@ -5,11 +5,12 @@ of Thrones* mod and by Stellaris. You lead a noble house in the Seven Kingdoms o
 your treasury, develop your lands, court or spurn your neighbours, and outlast rivals governed by
 AI rulers who play by the same rules.
 
-**Status:** Phase 1 (foundation and playable prototype) is implemented and verified headlessly;
-see [docs/PHASES.md](docs/PHASES.md). The manual Studio playtest in
+**Status:** the foundation (a playable strategy prototype) and Phase 1 (troops and visible
+armies) are implemented and verified headlessly; battles and sieges are next. See
+[docs/PHASES.md](docs/PHASES.md). The manual Studio playtest in
 [docs/TEST_PLAN.md](docs/TEST_PLAN.md) §3 is still to be performed.
 
-## What is in Phase 1
+## What is in the game (the foundation and Phase 1)
 
 * **Houses:** 10 playable houses (8 great, 2 minor) with real starting positions, rulers, families
   and traits.
@@ -26,16 +27,32 @@ see [docs/PHASES.md](docs/PHASES.md). The manual Studio playtest in
   great house, are kept in one data table. Houses raise armies from their levies (one province or
   all at once, gathering at a rally point), led by their best commanders, and march them over
   roads, rivers, passes and sea lanes, taking days that depend on distance, terrain, connection
-  and the slowest unit. Armies can be stopped, split, merged and disbanded; they cost upkeep every
-  month, live off their own land and starve abroad. Levies refill monthly.
+  and the pace of their men (swift units such as Dornish spearmen and Reach cavalry quicken a
+  host). Armies can be stopped, split, merged and disbanded; they cost upkeep for every day in the
+  field, live off their own land and starve abroad. Levies refill monthly. Levy and garrison
+  maximums already take modifiers from a buildings hook, which the buildings phase will fill.
 * **AI rulers:** they develop their lands and court each other through the same validated
   commands players use.
 * **Saves:** versioned save/load with revision-conflict protection, retries, and a labelled
   in-memory fallback when DataStores are unavailable.
 * **Interface:** a parchment-and-charcoal UI with a pannable, zoomable political map of the nine
-  great houses (flat house colours, crests, castles and ports, hover highlights), five map modes,
+  great houses (flat house colours, crests, castles and ports, hover highlights), six map modes,
   tooltips that explain every number, and a chronicle. It is responsive, with a compact layout
   and touch support.
+* **Armies in the interface:**
+  * Every army is a banner token on the map in its house's colour, with a small crest and its
+    troop count. It glides smoothly between provinces as the days pass, and the orders of your
+    marching armies are drawn as a dotted route ending in an arrowhead.
+  * The province panel shows each province's levies, garrison and ships and the armies standing
+    there, and raises its levies or calls every levy of your house to it.
+  * The Military tab sums up your troops, lists your armies and shows the selected one: its
+    commander, strength, composition by unit, morale, supply and orders, with Move, Stop, Split,
+    Merge and Disband.
+  * Move by picking a province on the map, or right-click land (or another army's banner) with an
+    army selected. Esc, a right-click or leaving the Military tab cancels.
+  * The Military map mode shades provinces by the men present and labels every garrison.
+  * The top bar shows your house's total troops, with a breakdown in its tooltip.
+  * Every disabled button says why.
 
 ## Running it in Roblox Studio
 
@@ -73,7 +90,7 @@ npm --prefix tools/typecheck install            # official Luau analyzer (WASM),
 
 `verify.sh` runs:
 * a compile check of every file;
-* the 123 scenario tests;
+* the 126 scenario tests;
 * Selene;
 * a Rojo build;
 * a check of the built place;

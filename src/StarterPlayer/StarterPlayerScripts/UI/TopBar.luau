@@ -1,10 +1,17 @@
 --!strict
 --[[
-	TopBar — house identity, treasury, holdings, campaign date and time controls.
+	TopBar — house identity, treasury, troops, holdings, campaign date and time controls.
 
 	Every number is server-supplied. The treasury tooltip explains the monthly budget line by line
-	using the breakdown the server computed. Time controls follow the host policy; buttons that the
-	player may not use are disabled with an explanation instead of hidden.
+	using the breakdown the server computed; the troops tooltip breaks the house's men down into
+	armies, levies, garrisons and ships, and a click on it opens the Military tab. Time controls
+	follow the host policy; buttons that the player may not use are disabled with an explanation
+	instead of hidden.
+
+	Width at the 1280 design size: the stats group (treasury 130, troops 140, holdings 120, gaps
+	18) ends at x 746, before the right-hand group (about 508 px, right-aligned at 1270). The
+	troops block is the widest so its caption fits "Troops · 12 armies". The compact layout hides
+	holdings.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -58,7 +65,7 @@ function TopBar.mount(parent: Frame, ctx: UIContext.Context, onCampaignMenu: (an
 	rulerLabel.Size = UDim2.new(1, -44, 0, 18)
 
 	-- Middle: stats ----------------------------------------------------------------------------
-	local stats = UI.create("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(320, 0), Size = UDim2.new(0, 360, 1, -2), Parent = bar })
+	local stats = UI.create("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(320, 0), Size = UDim2.new(0, 430, 1, -2), Parent = bar })
 	UI.list(stats, "horizontal", 18)
 
 	local function statBlock(order: number, width: number): (TextButton, TextLabel, TextLabel)
@@ -79,7 +86,7 @@ function TopBar.mount(parent: Frame, ctx: UIContext.Context, onCampaignMenu: (an
 		return block, value, caption
 	end
 
-	local treasuryBlock, treasuryValue, treasuryCaption = statBlock(1, 180)
+	local treasuryBlock, treasuryValue, treasuryCaption = statBlock(1, 130)
 	local coin = UI.create("Frame", { BackgroundColor3 = Colors.Gold, Size = UDim2.fromOffset(14, 14), Position = UDim2.fromOffset(0, 13), Parent = treasuryBlock })
 	UI.create("UICorner", { CornerRadius = UDim.new(1, 0), Parent = coin })
 	UI.stroke(coin, Colors.GoldBright, 1)
@@ -87,7 +94,22 @@ function TopBar.mount(parent: Frame, ctx: UIContext.Context, onCampaignMenu: (an
 	treasuryValue.Size = UDim2.new(1, -20, 0, 22)
 	treasuryCaption.Position = UDim2.fromOffset(20, 31)
 	treasuryCaption.Size = UDim2.new(1, -20, 0, 18)
-	local holdingsBlock, holdingsValue, holdingsCaption = statBlock(2, 150)
+
+	-- Troops: a small banner on a staff, like the army tokens on the map.
+	local troopsBlock, troopsValue, troopsCaption = statBlock(2, 140)
+	troopsBlock.Name = "Troops"
+	UI.create("Frame", { BackgroundColor3 = Colors.GoldBright, BorderSizePixel = 0, Size = UDim2.fromOffset(2, 17), Position = UDim2.fromOffset(1, 11), Parent = troopsBlock })
+	local flag = UI.create("Frame", { BackgroundColor3 = Colors.BurgundyBright, BorderSizePixel = 0, Size = UDim2.fromOffset(11, 8), Position = UDim2.fromOffset(3, 11), Parent = troopsBlock })
+	UI.stroke(flag, Colors.GoldBright, 1)
+	troopsValue.Position = UDim2.fromOffset(20, 8)
+	troopsValue.Size = UDim2.new(1, -20, 0, 22)
+	troopsCaption.Position = UDim2.fromOffset(20, 31)
+	troopsCaption.Size = UDim2.new(1, -20, 0, 18)
+	troopsBlock.Activated:Connect(function()
+		ctx.showTab("military")
+	end)
+
+	local holdingsBlock, holdingsValue, holdingsCaption = statBlock(3, 120)
 
 	-- Right: date, time controls, campaign menu -------------------------------------------------
 	local right = UI.create("Frame", {
@@ -166,9 +188,30 @@ function TopBar.mount(parent: Frame, ctx: UIContext.Context, onCampaignMenu: (an
 			table.insert(lines, `      {Format.escape(line.label)}: {Format.percent(line.value)}`)
 		end
 		table.insert(lines, `  Garrisons: <b>-{Format.gold(budget.garrisonUpkeep)}</b>`)
+		table.insert(lines, `  Armies: <b>-{Format.gold(budget.armyUpkeep or 0)}</b>`)
 		table.insert(lines, `  Administration: <b>-{Format.gold(budget.administration)}</b>`)
 		table.insert(lines, `<b>Net: {Format.signed(budget.net)} gold per month</b>`)
 		table.insert(lines, "Income and expenses are applied once at the end of each month.")
+		return table.concat(lines, "\n")
+	end)
+	Tooltip.bind(troopsBlock, function()
+		local houseId = store:myHouseId()
+		local house = houseId and store:house(houseId)
+		local military = house and house.military
+		if not house or not military then
+			return nil
+		end
+		local armies = military.armies or 0
+		local inUse = military.shipsInUse or 0
+		local lines = {
+			`<b>Troops: {Format.troops(military.total)} men</b>`,
+			`  In armies: <b>{Format.troops(military.raised)}</b> ({armies} {if armies == 1 then "army" else "armies"})`,
+			`  Levies at home: <b>{Format.troops(military.levies)}</b> of {Format.troops(military.leviesMax)}`,
+			`  Garrisons: <b>{Format.troops(military.garrisons)}</b> of {Format.troops(military.garrisonsMax)}`,
+			`  Ships: <b>{military.ships}</b>{if inUse > 0 then ` ({inUse} at sea)` else ""}`,
+			`  Army upkeep: <b>-{Format.gold(house.budget.armyUpkeep or 0)}</b> gold per month`,
+			`Levies refill by {math.floor(GameConfig.Military.LevyReplenishPerMonth * 100 + 0.5)}% of their maximum each month. Click for the Military tab.`,
+		}
 		return table.concat(lines, "\n")
 	end)
 	Tooltip.bind(holdingsBlock, function()
@@ -234,6 +277,12 @@ function TopBar.mount(parent: Frame, ctx: UIContext.Context, onCampaignMenu: (an
 			UI.flash(treasuryBlock, if house.treasury > lastTreasury then Colors.Positive else Colors.Negative)
 		end
 		lastTreasury = house.treasury
+		local military = house.military
+		if military then
+			local armies = military.armies or 0
+			troopsValue.Text = Format.troops(military.total or 0)
+			troopsCaption.Text = if armies == 0 then "Troops" elseif armies == 1 then "Troops · 1 army" else `Troops · {armies} armies`
+		end
 		holdingsValue.Text = `{#house.provinceIds} provinces`
 		holdingsCaption.Text = `Development {house.totalDevelopment}`
 	end

@@ -22,11 +22,11 @@ local Fonts = Theme.Fonts
 
 local SKILLS = {
 	{ key = "diplomacy", short = "DIP", name = "Diplomacy", effect = "Improves the effect of envoys you send." },
-	{ key = "martial", short = "MAR", name = "Martial", effect = "Will lead armies (Phase 5)." },
+	{ key = "martial", short = "MAR", name = "Martial", effect = "Leads armies; improves army strength." },
 	{ key = "stewardship", short = "STE", name = "Stewardship", effect = "Raises all tax income by 1.5% per point." },
-	{ key = "intrigue", short = "INT", name = "Intrigue", effect = "Will drive schemes (Phase 4)." },
+	{ key = "intrigue", short = "INT", name = "Intrigue", effect = "Will drive schemes (later phases)." },
 	{ key = "learning", short = "LEA", name = "Learning", effect = "Will matter for faith and counsel (later phases)." },
-	{ key = "prowess", short = "PRO", name = "Prowess", effect = "Personal combat skill (Phase 5)." },
+	{ key = "prowess", short = "PRO", name = "Prowess", effect = "Personal combat skill (later phases)." },
 }
 
 local RealmPanel = {}
@@ -196,8 +196,10 @@ function RealmPanel.mount(parent: Frame, ctx: UIContext.Context): UIContext.Pane
 		UI.statRow("Tax income (projected)", Format.signed(budget.taxIncome), 2, finances, Colors.Positive)
 		UI.statRow("Court upkeep", `-{Format.gold(budget.courtUpkeep)}`, 3, finances, Colors.Negative)
 		UI.statRow("Garrisons", `-{Format.gold(budget.garrisonUpkeep)}`, 4, finances, Colors.Negative)
-		UI.statRow("Administration", `-{Format.gold(budget.administration)}`, 5, finances, Colors.Negative)
-		UI.statRow("Net per month", Format.signed(budget.net), 6, finances, if budget.net >= 0 then Colors.Positive else Colors.Negative)
+		local armies = UI.statRow("Armies", `-{Format.gold(budget.armyUpkeep or 0)}`, 5, finances, Colors.Negative)
+		Tooltip.setText(armies, "Upkeep of your raised armies for a whole month; each army is charged for the days it is in the field. See the Military tab.")
+		UI.statRow("Administration", `-{Format.gold(budget.administration)}`, 6, finances, Colors.Negative)
+		UI.statRow("Net per month", Format.signed(budget.net), 7, finances, if budget.net >= 0 then Colors.Positive else Colors.Negative)
 
 		if #house.ledger > 0 then
 			UI.sectionHeader("Settled months", 9, content)

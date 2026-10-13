@@ -1,7 +1,16 @@
 --!strict
 -- Format — number and text formatting for the interface (presentation only).
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local EventText = require(ReplicatedStorage.Shared.Text.EventText)
+
 local Format = {}
+
+-- 4200 -> "4,200": head counts, written the same way as in server messages and event text.
+function Format.troops(count: number): string
+	return EventText.troops(count)
+end
 
 -- 1234.5 -> "1,234.5"
 function Format.gold(value: number, decimals: number?): string

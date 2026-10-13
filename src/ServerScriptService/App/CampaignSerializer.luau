@@ -11,7 +11,8 @@
 	  campaign      = {
 	    campaignId, bookmarkId, seed, rngState, nextArmySerial,
 	    clock      = { date, speed, lastProcessedMonthIndex },     -- loads paused
-	    houses     = { [houseId] = { treasury, rulerId, extinct, ledger, aiNextEvaluationMonth } },
+	    houses     = { [houseId] = { treasury, rulerId, extinct, ledger, aiNextEvaluationMonth,
+	                                 armyUpkeepAccrued? } },
 	    provinces  = { [provinceId] = { ownerHouseId, occupierHouseId?, development, levies,
 	                                    garrisonTroops } },
 	    characters = { [characterId] = { ...full character record... } },
@@ -30,6 +31,11 @@
 	save that no longer exist in content are errors: the save is rejected and the live campaign is
 	left untouched. Armies are not content: the saved set replaces the (empty) bookmark set, and an
 	army that references an unknown province, unit, house or character fails the load.
+	Balance drift: when a retune has lowered a maximum since the save was made, a saved levy or
+	garrison pool above its province's current maximum, or an army's morale or supply above
+	MoraleMax or SupplyMax, is lowered to that maximum with a warning (Military.processMonth does
+	the same to pools in play). Negative or fractional values are still errors.
+	armyUpkeepAccrued did not exist in the first schema 2 saves: absent, it loads as 0.
 
 	Migrations: MIGRATIONS[n] upgrades a campaign table from version n to n + 1.
 	  1 -> 2  adds armies (none) and the army id counter. Province levy and garrison pools did not
@@ -111,6 +117,7 @@ function CampaignSerializer.serialize(state: GameTypes.CampaignState, savedAt: n
 			extinct = house.extinct,
 			ledger = ledger,
 			aiNextEvaluationMonth = house.ai.nextEvaluationMonth,
+			armyUpkeepAccrued = house.armyUpkeepAccrued,
 		}
 	end
 
@@ -461,6 +468,10 @@ function CampaignSerializer.deserialize(record: any, config: Config): Deserializ
 			or type(data.extinct) ~= "boolean" or not isInteger(data.aiNextEvaluationMonth) or type(data.ledger) ~= "table" then
 			return fail(`house '{houseId}' is malformed`)
 		end
+		local accrued = if data.armyUpkeepAccrued == nil then 0 else data.armyUpkeepAccrued
+		if not isFiniteNumber(accrued) or accrued < 0 then
+			return fail(`house '{houseId}' has invalid accrued army upkeep`)
+		end
 		local ledger = {}
 		for _, entry in data.ledger do
 			if type(entry) ~= "table" or not isInteger(entry.monthIndex) or not isFiniteNumber(entry.income)
@@ -479,6 +490,7 @@ function CampaignSerializer.deserialize(record: any, config: Config): Deserializ
 		house.rulerId = data.rulerId
 		house.extinct = data.extinct
 		house.ledger = ledger
+		house.armyUpkeepAccrued = accrued
 		house.ai.nextEvaluationMonth = data.aiNextEvaluationMonth
 	end
 	for houseId in state.houses do
@@ -499,16 +511,26 @@ function CampaignSerializer.deserialize(record: any, config: Config): Deserializ
 			or (data.occupierHouseId ~= nil and type(data.occupierHouseId) ~= "string") then
 			return fail(`province '{provinceId}' is malformed`)
 		end
-		local levies, garrisonTroops = data.levies, data.garrisonTroops
-		if not poolsSaved and levies == nil and garrisonTroops == nil then
-			levies = MilitaryRules.levyMax(provinceId, data.development, config.Military)
-			garrisonTroops = MilitaryRules.garrisonMax(provinceId, data.development, config.Military)
-		elseif not isInteger(levies) or not isInteger(garrisonTroops) then
-			return fail(`province '{provinceId}' is malformed`)
-		end
 		province.ownerHouseId = data.ownerHouseId
 		province.occupierHouseId = data.occupierHouseId
 		province.development = data.development
+		local leviesMax = MilitaryRules.provinceLevyMax(province, config.Military)
+		local garrisonMax = MilitaryRules.provinceGarrisonMax(province, config.Military)
+		local levies, garrisonTroops = data.levies, data.garrisonTroops
+		if not poolsSaved and levies == nil and garrisonTroops == nil then
+			levies, garrisonTroops = leviesMax, garrisonMax
+		elseif not isInteger(levies) or not isInteger(garrisonTroops) then
+			return fail(`province '{provinceId}' is malformed`)
+		end
+		-- Balance drift: a maximum lowered since the save was made.
+		if levies > leviesMax then
+			table.insert(warnings, `province '{provinceId}': levies {levies} lowered to the current maximum {leviesMax}`)
+			levies = leviesMax
+		end
+		if garrisonTroops > garrisonMax then
+			table.insert(warnings, `province '{provinceId}': garrison {garrisonTroops} lowered to the current maximum {garrisonMax}`)
+			garrisonTroops = garrisonMax
+		end
 		province.levies = levies
 		province.garrisonTroops = garrisonTroops
 	end
@@ -556,6 +578,15 @@ function CampaignSerializer.deserialize(record: any, config: Config): Deserializ
 		local army = readArmy(armyId, data, state, errors)
 		if not army then
 			return { ok = false, state = nil, errors = errors, warnings = warnings }
+		end
+		-- Balance drift: a MoraleMax or SupplyMax lowered since the save was made.
+		if army.morale > config.Military.MoraleMax then
+			table.insert(warnings, `army '{armyId}': morale {army.morale} lowered to the current maximum {config.Military.MoraleMax}`)
+			army.morale = config.Military.MoraleMax
+		end
+		if army.supply > config.Military.SupplyMax then
+			table.insert(warnings, `army '{armyId}': supply {army.supply} lowered to the current maximum {config.Military.SupplyMax}`)
+			army.supply = config.Military.SupplyMax
 		end
 		armies[armyId] = army
 	end

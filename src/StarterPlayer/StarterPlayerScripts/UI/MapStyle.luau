@@ -49,6 +49,11 @@ MapStyle.LocationLabelZoom = 0.75
 MapStyle.IconSize = 14
 MapStyle.LocationTextSize = 12
 
+-- Military map mode only (not drawn by the preview tool): "Garrison 1,800" under each holding
+-- icon, moved below the holding's name once names are shown.
+MapStyle.GarrisonTextSize = 11
+MapStyle.GarrisonBelowName = 15
+
 MapStyle.Ink = Color3.fromRGB(24, 20, 16)
 MapStyle.Paper = Color3.fromRGB(244, 236, 216)
 

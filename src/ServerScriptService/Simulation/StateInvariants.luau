@@ -215,6 +215,9 @@ function StateInvariants.check(state: GameTypes.CampaignState, config: Invariant
 		if type(house.ledger) ~= "table" or #house.ledger > config.Economy.LedgerLength then
 			fail(`{where}: ledger is invalid or too long`)
 		end
+		if not isFiniteNumber(house.armyUpkeepAccrued) or house.armyUpkeepAccrued < 0 then
+			fail(`{where}: accrued army upkeep {tostring(house.armyUpkeepAccrued)} is invalid`)
+		end
 		if type(house.ai) ~= "table" or not isInteger(house.ai.nextEvaluationMonth) then
 			fail(`{where}: ai schedule is invalid`)
 		end
@@ -238,11 +241,11 @@ function StateInvariants.check(state: GameTypes.CampaignState, config: Invariant
 			or province.development > config.Economy.MaxDevelopment then
 			fail(`{where}: development {tostring(province.development)} is out of range`)
 		else
-			local leviesMax = MilitaryRules.levyMax(provinceId, province.development, config.Military)
+			local leviesMax = MilitaryRules.provinceLevyMax(province, config.Military)
 			if not isInteger(province.levies) or province.levies < 0 or province.levies > leviesMax then
 				fail(`{where}: levies {tostring(province.levies)} are outside 0..{leviesMax}`)
 			end
-			local garrisonMax = MilitaryRules.garrisonMax(provinceId, province.development, config.Military)
+			local garrisonMax = MilitaryRules.provinceGarrisonMax(province, config.Military)
 			if not isInteger(province.garrisonTroops) or province.garrisonTroops < 0 or province.garrisonTroops > garrisonMax then
 				fail(`{where}: garrison {tostring(province.garrisonTroops)} is outside 0..{garrisonMax}`)
 			end

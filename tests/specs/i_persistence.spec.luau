@@ -155,7 +155,7 @@ return function(t)
 			{ "unknown commander", function(r) r.campaign.armies.army_1.commanderId = "aegon_targaryen" end, "unknown commander" },
 			{ "foreign commander", function(r) r.campaign.armies.army_1.commanderId = "balon_greyjoy" end, "is not of house 'stark'" },
 			{ "commander twice", function(r) r.campaign.armies.army_2.commanderId = r.campaign.armies.army_1.commanderId end, "already commands" },
-			{ "morale out of range", function(r) r.campaign.armies.army_1.morale = 101 end, "morale 101 is out of range" },
+			{ "morale out of range", function(r) r.campaign.armies.army_1.morale = -1 end, "morale -1 is out of range" },
 			{ "supply not a number", function(r) r.campaign.armies.army_1.supply = "full" end, "morale or supply invalid" },
 			{ "route off the map", function(r) r.campaign.armies.army_2.route = { "atlantis" } end, "is not a province" },
 			{ "route not adjacent", function(r) r.campaign.armies.army_2.route = { "pyke" } end, "is not adjacent" },
@@ -171,7 +171,9 @@ return function(t)
 			},
 			{ "bad flag", function(r) r.campaign.armies.army_1.gather = "yes" end, "flags invalid" },
 			{ "levies missing", function(r) r.campaign.provinces.winterfell.levies = nil end, "province 'winterfell' is malformed" },
-			{ "levies above the maximum", function(r) r.campaign.provinces.wolfswood.levies = 99999 end, "levies 99999 are outside" },
+			{ "negative levies", function(r) r.campaign.provinces.wolfswood.levies = -1 end, "levies -1 are outside" },
+			{ "fractional garrison", function(r) r.campaign.provinces.wolfswood.garrisonTroops = 10.5 end, "province 'wolfswood' is malformed" },
+			{ "bad accrued upkeep", function(r) r.campaign.houses.stark.armyUpkeepAccrued = -3 end, "invalid accrued army upkeep" },
 			{ "negative garrison", function(r) r.campaign.provinces.winterfell.garrisonTroops = -1 end, "garrison -1 is outside" },
 		}
 		for _, case in cases do
@@ -179,6 +181,41 @@ return function(t)
 			expect.falsy(result.ok, `{case[1]} should be rejected`)
 			expect.anyContains(result.errors, case[3], case[1])
 		end
+	end)
+
+	t.test("a save loads after a retune lowered the pool, morale and supply maximums", function()
+		local MilitaryRules = t.vr.require("ReplicatedStorage.Shared.Rules.MilitaryRules")
+		local sim = campaignWithArmies()
+		local record = jsonRoundTrip(Serializer.serialize(sim.state, 1, nil))
+		local armies = sim.state.armies
+		expect.equal(record.campaign.provinces.bitterbridge.levies, 11050, "a full pool")
+
+		-- The balance patch: fewer levies per development, smaller garrisons, lower maximums.
+		local retuned = fx.config({
+			["AI.MaxEvaluationsPerMonth"] = 0,
+			["Military.ShipCapacity"] = 30,
+			["Military.LevyPerDevelopment"] = sim.config.Military.LevyPerDevelopment - 50,
+			["Military.MoraleMax"] = 60,
+			["Military.SupplyMax"] = 80,
+		})
+		local result = Serializer.deserialize(record, retuned)
+		expect.truthy(result.ok, `deserialize failed: {table.concat(result.errors, "; ")}`)
+		local state = result.state :: any
+		local bitterbridge = state.provinces.bitterbridge
+		expect.equal(bitterbridge.levies, MilitaryRules.levyMax("bitterbridge", bitterbridge.development, retuned.Military), "lowered to the new maximum")
+		expect.anyContains(result.warnings, "province 'bitterbridge': levies 11050 lowered to the current maximum 10750")
+		expect.equal(state.provinces.white_harbor.levies, 0, "an emptied pool stays empty")
+		for armyId, army in state.armies do
+			expect.truthy(army.morale <= 60 and army.supply <= 80, `{armyId}: morale and supply within the new maximums`)
+			expect.equal(army.morale, math.min(armies[armyId].morale, 60), `{armyId}: morale`)
+		end
+		expect.anyContains(result.warnings, "army 'army_1': supply 100 lowered to the current maximum 80")
+		expect.deepEqual(fx.StateInvariants.check(state, retuned), {}, "the loaded campaign is valid")
+
+		-- The campaign goes on under the new tuning.
+		local continued = fx.Simulation.new({ state = state, config = retuned })
+		continued:advanceToNextMonth()
+		expect.deepEqual(fx.StateInvariants.check(continued.state, retuned), {}, "still valid a month later")
 	end)
 
 	t.test("content added after a save is initialised from the bookmark with a warning", function()

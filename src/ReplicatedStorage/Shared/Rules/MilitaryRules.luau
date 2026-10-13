@@ -10,17 +10,31 @@
 	data comes from Content (provinces, terrains, holdings, regions and the unit table). Unit maps
 	are { [unitId]: men } with positive integer counts; every sum over a unit map runs in sorted
 	unit id order so floating-point results are identical on every machine and after a save.
+
+	Buildings hook: a province's levy and garrison maximums also take PoolModifiers, which
+	poolModifiers(province) derives from the province's campaign state. Today it returns the
+	identity; the buildings phase (docs/PHASES.md) changes only that function, because every
+	caller that holds a province state goes through provinceLevyMax / provinceGarrisonMax.
 ]]
 
 local Content = require(script.Parent.Parent.Data.Content)
 local EconomyRules = require(script.Parent.EconomyRules)
 local GameConfig = require(script.Parent.Parent.Config.GameConfig)
+local GameTypes = require(script.Parent.Parent.Types.GameTypes)
 local TableUtil = require(script.Parent.Parent.Util.TableUtil)
 
 export type MilitaryConfig = typeof(GameConfig.Military)
 
 -- unitId -> men (integers > 0).
 export type Units = { [string]: number }
+
+-- Changes to a province's pool maximums (from buildings, in a later phase). Multipliers apply
+-- before rounding; garrisonFlat adds men to the garrison after its multiplier.
+export type PoolModifiers = {
+	levyMultiplier: number,
+	garrisonMultiplier: number,
+	garrisonFlat: number,
+}
 
 -- Anything that names an army: ArmyState and the replicated army view both qualify.
 export type ArmyLike = {
@@ -37,24 +51,54 @@ local function roundTo(value: number, step: number): number
 	return math.floor(value / step + 0.5) * step
 end
 
--- Levy maximum of a province: the men it can raise when its pool is full.
-function MilitaryRules.levyMax(provinceId: string, development: number, config: MilitaryConfig): number
+-- Frozen, so no caller can change the identity every province shares (the cast drops the
+-- read-only field types that table.freeze gives it).
+local NO_MODIFIERS: PoolModifiers = table.freeze({ levyMultiplier = 1, garrisonMultiplier = 1, garrisonFlat = 0 }) :: any
+
+--[[
+	The buildings hook: modifiers of a province's levy and garrison maximums, from its campaign
+	state. No buildings exist yet, so every province gets the identity; the buildings phase reads
+	the province's buildings here and nothing else has to change.
+]]
+function MilitaryRules.poolModifiers(_province: GameTypes.ProvinceState): PoolModifiers
+	return NO_MODIFIERS
+end
+
+-- Levy maximum of a province: the men it can raise when its pool is full. `modifiers` (default:
+-- none) come from poolModifiers; callers holding a province state use provinceLevyMax.
+function MilitaryRules.levyMax(provinceId: string, development: number, config: MilitaryConfig, modifiers: PoolModifiers?): number
 	local definition = Content.provinces[provinceId]
 	local holding = Content.holdingKinds[definition.holding.kind]
 	local terrain = Content.terrains[definition.terrainId]
 	local region = Content.regions[definition.regionId]
+	local applied = modifiers or NO_MODIFIERS
 	local raw = (config.LevyBase + config.LevyPerDevelopment * development)
 		* holding.levyMultiplier
 		* terrain.manpower
 		* region.manpower
+		* applied.levyMultiplier
 	return roundTo(raw, config.LevyRounding)
 end
 
--- Garrison maximum of a province: the men who hold its walls and never march.
-function MilitaryRules.garrisonMax(provinceId: string, development: number, config: MilitaryConfig): number
+-- Garrison maximum of a province: the men who hold its walls and never march. `modifiers` as
+-- for levyMax; callers holding a province state use provinceGarrisonMax.
+function MilitaryRules.garrisonMax(provinceId: string, development: number, config: MilitaryConfig, modifiers: PoolModifiers?): number
 	local definition = Content.provinces[provinceId]
 	local holding = Content.holdingKinds[definition.holding.kind]
-	return roundTo(holding.garrisonBase + holding.garrisonPerDevelopment * development, config.GarrisonRounding)
+	local applied = modifiers or NO_MODIFIERS
+	local raw = (holding.garrisonBase + holding.garrisonPerDevelopment * development) * applied.garrisonMultiplier
+		+ applied.garrisonFlat
+	return roundTo(raw, config.GarrisonRounding)
+end
+
+-- Levy maximum of a province in a campaign: at its development, with its pool modifiers.
+function MilitaryRules.provinceLevyMax(province: GameTypes.ProvinceState, config: MilitaryConfig): number
+	return MilitaryRules.levyMax(province.id, province.development, config, MilitaryRules.poolModifiers(province))
+end
+
+-- Garrison maximum of a province in a campaign: at its development, with its pool modifiers.
+function MilitaryRules.provinceGarrisonMax(province: GameTypes.ProvinceState, config: MilitaryConfig): number
+	return MilitaryRules.garrisonMax(province.id, province.development, config, MilitaryRules.poolModifiers(province))
 end
 
 -- Ships a province contributes to its owner's fleet.
@@ -66,7 +110,7 @@ function MilitaryRules.ships(provinceId: string, development: number): number
 	return math.floor((terrain.shipsPerDevelopment + holding.shipsPerDevelopment) * development * region.naval + 0.5)
 end
 
--- Share of each unit in the levies a house raises. Phase 5 hook: buildings will modify it.
+-- Share of each unit in the levies a house raises. Buildings (a later phase) may modify it.
 function MilitaryRules.composition(houseId: string): { [string]: number }
 	return Content.military.compositions[houseId] or Content.military.defaultComposition
 end
@@ -149,16 +193,23 @@ function MilitaryRules.halve(units: Units): (Units, Units)
 	return keep, split
 end
 
--- An army marches at the pace of its slowest unit (1 for an empty unit map).
+--[[
+	An army's marching speed: the head-count-weighted harmonic mean of its unit speeds, which is
+	the pace at which its average man covers the ground (1 for an empty unit map). Every unit
+	counts in proportion to its men, so a host rich in swift units marches faster and a few slow
+	siege engines slow it only a little.
+]]
 function MilitaryRules.armySpeed(units: Units): number
-	local speed = math.huge
-	for unitId, count in units do
+	local men, time = 0, 0
+	for _, unitId in TableUtil.sortedKeys(units) do
 		local unit = Content.units[unitId]
+		local count = units[unitId]
 		if unit and count > 0 then
-			speed = math.min(speed, unit.speed)
+			men += count
+			time += count / unit.speed
 		end
 	end
-	return if speed == math.huge then 1 else speed
+	return if men > 0 then men / time else 1
 end
 
 --[[

@@ -9,11 +9,11 @@
 	              "walls" is a pseudo-class used by sieges.
 	units:        every unit type. attack and defence are per-man ratings; morale is a bonus (0..30)
 	              to the army's starting morale weighted by head count; speed multiplies march speed
-	              (1 = men on foot; an army moves at the pace of its slowest unit); upkeep is the gold
-	              factor (1 = levy spearmen); siege is damage to walls. houseId marks the unique unit
-	              of a great house. terrain, regions and situations are combat multipliers in
-	              particular terrain, regions (the snows of the North) and situations ("raid",
-	              "landing", "riverDefense").
+	              (1 = men on foot; an army moves at the pace of its average man, so every unit
+	              counts by its head count); upkeep is the gold factor (1 = levy spearmen); siege is
+	              damage to walls. houseId marks the unique unit of a great house. terrain, regions
+	              and situations are combat multipliers in particular terrain, regions (the snows
+	              of the North) and situations ("raid", "landing", "riverDefense").
 	compositions: house id -> unit id -> share of every levy the house raises (shares sum to 1).
 	              A house's unique unit may appear only in that house's composition.
 	defaultComposition: used by houses without an entry (the minor houses).

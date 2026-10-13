@@ -10,7 +10,7 @@
 	courtUpkeep: base monthly cost of the house's court, before trait modifiers.
 
 	Phase 1 treats every house as a top-level political actor. The feudal hierarchy (lieges,
-	vassals, titles) is introduced in Phase 3 and will reference these ids.
+	vassals, titles) is introduced in Phase 7 and will reference these ids.
 ]]
 
 local GameTypes = require(script.Parent.Parent.Parent.Types.GameTypes)
