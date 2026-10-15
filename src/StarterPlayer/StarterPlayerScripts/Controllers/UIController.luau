@@ -513,12 +513,12 @@ function UIController.start()
 				showTab("map")
 			end
 			if houseId ~= currentHouseId then
-				-- New house (first selection, or restored by a campaign load): centre on its seat.
+				-- New house (first selection, or restored by a campaign load): fly to its seat.
 				currentHouseId = houseId
 				local seat = seatProvince(houseId)
 				if seat then
 					selectProvince(seat, false)
-					MapController.focusProvince(seat, 0.75)
+					MapController.focusStart(seat)
 				end
 			end
 		else

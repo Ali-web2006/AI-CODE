@@ -7,7 +7,7 @@ The game is built in two stages. The foundation, a playable strategy prototype, 
 armies programme follows it in five phases: troops and visible armies (Phase 1), battles and
 sieges (Phase 2), Ironborn raiding with sea zones and fleets (Phase 3), AI personalities and
 stances (Phase 4), and resources and buildings (Phase 5). The rest of the long-term plan comes
-after it (Phases 6–10).
+after it (Phases 6–10). A map upgrade in four parts (A–D) comes between Phase 1 and Phase 2.
 
 ## Foundation — playable strategy prototype
 
@@ -68,6 +68,37 @@ Known limitations (by design, deferred to later phases):
 * The map shows the nine great houses only; minor-house fiefs, rivers and roads are not drawn
   (adjacency still exists in the content). MapData supports minor houses through sub-territory
   `houseId` overrides.
+
+## Map upgrade — a framed, zoomable map of Westeros
+
+**Status: Part A done and verified headlessly. The Studio checklist in TEST_PLAN.md §3.13 is still
+to be run by a human. Parts B–D come next, each after the go-ahead; Phase 2 follows the map
+upgrade.**
+
+| System | State | Where | Verified by |
+|---|---|---|---|
+| Part A — framing: the whole-map view fits Westeros (`MapConfig.View.Bounds`: Beyond the Wall to the tip of Dorne with a thin sea margin) to the full height of the map area (the old view used 98% of it, so Westeros is about 2% larger); the zoom cannot go out past that view; panning is limited to the frame, so the view never leaves it for empty sea and the empty sea east of the Stepstones, where Essos would be, is out of reach; `FitMode = "fill"` is the one-line switch that makes Westeros cover the whole map area | Done | `MapConfig`, `MapController` | UI smoke test; Studio §3.13 |
+| Part A — zoom levels, counted from the whole-map view (`MapConfig.Zoom`): political; a blend zone where the political picture fades over an atlas of the land, crests and house names fade out, and kingdom borders in the house colours (with a faint fill on hover) replace the black borders at `BorderSwitch`; atlas, notable and close thresholds for the settlements to come | Done | `MapConfig`, `MapController` | UI smoke test; Studio §3.13 |
+| Part A — the camera: eased flights (province and army focus, + / − / [ ], quick clicks adding up), a smooth wheel zoom towards the pointer that a drag carries along, pinch zoom about the fingers with a two-finger pan, after which the finger still down pans on; it runs on RenderStepped only while moving; the view keeps its middle when the map area changes size | Done | `MapController` | UI smoke test; Studio §3.13 |
+| Part A — one muted lore palette for the atlas look and the Terrain map mode, tuned so each region reads as its look by area; `MapConfig` as the one tuning file of the 2D map (it replaces `MapStyle`); `ASSETS.md`, the origin of every map asset | Done | `MapConfig`, `ASSETS.md` | UI smoke test |
+| Parts B–D — settlements by zoom level (the major ones in the atlas, all of them with names close in), terrain features, kingdom names, generated atlas terrain tiles, an information panel, map layers and search | Next | | |
+
+Known limitations of Part A (by design):
+* The atlas look is a placeholder until the terrain tiles of the later parts: one flat lore
+  colour per province, varied slightly per sub-territory, with no relief, rivers or settlements.
+* The colour of a province comes from its region and its game terrain type, so a whole province
+  has one look (the Greenblood's valley is a greener tint of Dorne's sand). The large mountain
+  provinces (the Eyrie, the Bloody Gate, the Golden Tooth, Kingsgrave, Yronwood) only lean toward
+  their mountain colour, so that each region still reads as its look; the mountain ranges
+  themselves come with the terrain data of Part C.
+* Westeros is tall and narrow (about 1 : 2) and the map area wide (816 × 662 on the design
+  layout), so the whole-map view fitted to the full height leaves sea at both sides; Part A makes
+  it only about 2% larger. `MapConfig.View.FitMode = "fill"` makes Westeros cover the whole map
+  area instead: the top and bottom are then off screen until you drag, and the zoom levels,
+  counted from the whole-map view, keep that view political.
+* Wheel and pinch zoom keep the point under the pointer fixed except near Westeros's edges,
+  where the view slides just enough to stay within the panning limits (zooming in at Pyke from
+  the whole-map view, Pyke ends about 40 px from the pointer).
 
 ## Phase 2 — Battles and sieges
 

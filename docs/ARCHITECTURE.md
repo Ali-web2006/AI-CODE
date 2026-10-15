@@ -325,20 +325,70 @@ field by field).
   One `UIScale` fits the 1280×720 design to any screen. Below 1100 virtual pixels of width, a
   compact layout narrows the navigation rail and the panel, which can also be hidden. Each panel
   updates in isolation, so one failing view cannot stop the others.
-* `MapController` draws `Data/World/MapData` (outlines, palettes, crests, locations):
+* `MapController` draws `Data/World/MapData` (outlines, palettes, crests, locations). Every
+  tunable value of the map lives in `UI/MapConfig`, the one tuning file of the 2D map (framing,
+  zoom levels, camera, border weights, label and crest sizes, map mode colours, the atlas look
+  and the land palette); `tools/render_map_preview.py` mirrors its political drawing values.
+  * Layers inside the map container, bottom to top: `AtlasFills`, `Fills`, `DragCatcher`,
+    `Canvas`, then the overlay (map modes, legend, zoom buttons).
   * Fills: Roblox GUI has no polygon fill, so a `ViewportFrame` looks straight down at flat
     triangles (`UI/FlatTriangles`: two WedgeParts per triangle, full ambient light, so colours
-    are exact). Outlines are triangulated by `Shared/Util/Polygon` (ear clipping) at startup.
+    are exact), one model per sub-territory and special feature, named by its id. Outlines are
+    triangulated by `Shared/Util/Polygon` (ear clipping) once at startup.
+  * AtlasFills: a second `ViewportFrame` with the same triangles in the atlas look: each
+    sub-territory in its province's lore colour (`MapConfig.terrainColor`, from its region's
+    look and its game terrain type, varied by a few per cent of lightness by shade) and the
+    special features in `MapConfig.featureColor`, on the pale atlas sea. It is visible only while
+    the atlas is in view, and its camera follows the political one.
   * Canvas: a map-sized frame moved and resized with the view. Its children are placed in scale
     units, so panning and zooming need no per-element work: borders and highlights (`Path2D`,
     constant on-screen width), crests (`UI/SigilView`), location icons (`UI/MapIcons`) and labels.
-    The `ViewportFrame` camera is recomputed from the same zoom and offset.
+    GUI offsets are whole pixels, so the canvas is placed on the nearest pixel and both viewport
+    cameras are computed from the canvas as placed: fills and borders line up exactly.
+  * Zoom levels (`MapConfig.Zoom`): every threshold is a multiple of the whole-map zoom of the
+    active `FitMode` (2.3 = zoomed in 2.3 times from the whole-map view), so the whole-map view
+    is political on any screen and in either fit mode; `MapConfig.blend(relativeZoom)` eases
+    from 0 to 1 across the blend zone and `MapConfig.level(relativeZoom)` names the level. Zooms
+    about on-screen size stay in pixels per map unit: `View.MaxZoom`, the crest and location
+    zooms, and `UI/ArmyLayer`'s route-dot buckets. Political below `BlendStart`; across the blend
+    zone the political picture fades out over the atlas through the viewport's
+    `ImageTransparency` and `BackgroundTransparency` (two properties, no per-triangle work), and
+    crests and the great-house labels (with their halos) fade in `BlendSteps` steps and hide at
+    the end. Path2D strokes cannot be made transparent, so outlines switch layers instead of
+    fading: once the fade reaches `BorderSwitch` (0.5, the middle of the zone) the black region
+    and sub-territory borders give way to `KingdomBorders` (every region in its ruling house's
+    colour), and hovering a region shows its `KingdomHover_<regionId>` outline and tints its
+    atlas triangles toward the house colour (the faint fill) instead of the political glow and
+    brightening. The atlas, notable and close levels are thresholds for the settlements of the
+    later parts of the map upgrade. The blend applies in the houses and terrain modes only; the
+    data modes stay political at every zoom. `MapController.zoomLevel()` and
+    `MapController.blend()` report the state for later parts.
+  * Camera: the view is framed by `MapConfig.View.Bounds` (Westeros with a sea margin). The
+    whole-map zoom fits the frame's height to the map area (or, with `FitMode = "fill"`, covers
+    the area); the zoom ranges from it (times `MinZoomFactor`) to `MaxZoom`, or to the Close
+    level where that lies further in. Every view change is clamped per axis between the two
+    offsets that put the frame's near and far edges on the map area's edges: where the frame is
+    larger than the area the view stays inside the frame, and where it is smaller (the sides of
+    the whole-map view) the frame stays wholly on screen but may slide. Flights (`flyTo`:
+    ease-out cubic, the zoom interpolated in log space, the target clamped first) serve
+    `fitToView` (centred on the frame), `focusProvince`, `focusStart` (the first view, at
+    `Camera.StartZoom`), `focusArmy` and the + / − / [ ] buttons (quick clicks add up); the
+    mouse wheel moves a target zoom by `WheelStep` and the view approaches it exponentially,
+    keeping the cursor's map point fixed wherever the clamp allows (near the frame's edges the
+    view slides instead); the target follows the zoom range when the map area changes size, so
+    a glide always arrives. Both run on `RunService.RenderStepped`, connected only while the
+    camera moves. A press on the map, a pinch, a new wheel notch or a new flight stops the
+    running motion; dragging during a wheel glide moves the glide's anchor with the pointer. A
+    pinch zooms about the two-finger midpoint and pans with it, is never a click and clears the
+    touch highlight; afterwards the finger still down (whichever lifted first) carries on the
+    drag from its next move. When the map area changes size (panel hidden or shown, window
+    resized), the map point in the middle stays there at the same zoom, unless that zoom is now
+    below the whole-map view, which then refits.
   * Interaction: hover hit-tests the sub-territories (bounding box, then point in polygon) to
     brighten one, outline its region and feed the tooltip; a click selects the sub-territory's
     province through `onSelect`, exactly as the old province markers did.
-  * Drawing rules (border weights, zoom thresholds, crest and label sizes) live in
-    `UI/MapStyle`; `tools/render_map_preview.py` mirrors them.
-  * Six map modes: houses, realm, relations, wealth, terrain and military. The mode buttons are
+  * Six map modes: houses, realm, relations, wealth, terrain and military. The terrain mode uses
+    the same lore palette as the atlas (also for the special features). The mode buttons are
     named `Mode_<id>`, because "Military" is also a navigation tab.
   * Armies: `UI/ArmyLayer`, mounted by `MapController` through a small surface interface (layer
     factory, scale positions, drag start, army command, hover, selection callback), draws a token

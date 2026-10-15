@@ -45,7 +45,7 @@ local MilitaryRules = require(ReplicatedStorage.Shared.Rules.MilitaryRules)
 local ReplicaStore = require(script.Parent.Parent.Controllers.ReplicaStore)
 local ArmyInfo = require(script.Parent.ArmyInfo)
 local Format = require(script.Parent.Format)
-local MapStyle = require(script.Parent.MapStyle)
+local MapConfig = require(script.Parent.MapConfig)
 local SigilView = require(script.Parent.SigilView)
 local Theme = require(script.Parent.Theme)
 local Tooltip = require(script.Parent.Tooltip)
@@ -211,7 +211,7 @@ end
 local function createToken(army: { [string]: any }): Token
 	local armyId: string = army.id
 	local color = houseColor(army.houseId)
-	local textColor, halo = MapStyle.contrast(color)
+	local textColor, halo = MapConfig.contrast(color)
 	local button = UI.create("TextButton", {
 		Name = `Army_{armyId}`,
 		AnchorPoint = Vector2.new(0.5, 1),

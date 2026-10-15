@@ -3,7 +3,8 @@
 Renders a PNG preview of the world map from its configuration (MapData + SigilArt), so map edits
 can be reviewed without Roblox Studio. It mirrors the in-game drawing rules of MapController:
 flat sub-territory fills, thin sub-territory borders, thicker region borders, crests and two-line
-great-house labels sized by zoom (MapStyle), location icons and labels past the label zoom.
+great-house labels sized by zoom (MapConfig), location icons and labels past the label zoom.
+It draws the political look only (the atlas look of closer zooms is not rendered).
 
 Usage:
   lune run tests/map_dump.luau > build/map.json
@@ -23,7 +24,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 SUPERSAMPLE = 3
 
-# Keep in sync with src/StarterPlayer/StarterPlayerScripts/UI/MapStyle.luau.
+# Keep in sync with src/StarterPlayer/StarterPlayerScripts/UI/MapConfig.luau.
 STYLE = {
     "sub_border": ((48, 48, 48), 1.0),
     "region_border": ((14, 14, 14), 2.0),

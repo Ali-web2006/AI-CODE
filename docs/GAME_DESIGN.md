@@ -393,14 +393,23 @@ Balance over a 30-year all-AI run (`tests/balance_report.luau`):
   * Realm: the colour of the house that holds each province today.
   * Relations: green to grey to red, relative to your house.
   * Wealth: monthly income.
-  * Terrain.
+  * Terrain: the land's own muted colours, region by region (the same palette as the atlas look
+    below).
   * Military: from pale to deep red by the men present in each province (its
     garrison plus the armies standing there), relative to the province with the most. Each
     holding icon also gets a "Garrison 1,800" label, shown from the zoom at which icons appear.
 * Gold outlines: thin around your own provinces, thick around the selected one.
-* Detail by zoom: crests and great-house labels are always shown (crests fade when zoomed far
-  in); location icons appear from a medium zoom and their names from a closer one. A toggle
-  hides the thin sub-territory borders.
+* Framing and zoom levels (all tunable in UI/MapConfig.luau; the levels count from the
+  whole-map view, so it is political on every screen): the whole-map view fits Westeros,
+  from Beyond the Wall to Dorne, to the height of the map area, and the view never zooms out past
+  it or pans off into empty sea. From afar the map is political: crests and great-house labels,
+  with location icons from a medium zoom and their names from a closer one. Zooming in crosses a
+  blend zone where the house colours, crests and house labels fade into an atlas of the land, and
+  the black borders become thin kingdom borders in each house's colour; hovering a region in the
+  atlas outlines it and gives it a faint fill in that colour. Settlements will appear in the atlas
+  with the later parts of the map upgrade. The Houses and Terrain modes blend; the data modes
+  (Realm, Relations, Wealth, Military) keep their colours at every zoom. A toggle hides the thin
+  sub-territory borders of the political map.
 * Hovering land brightens the sub-territory, outlines the whole region and shows a tooltip with
   the region, its great house and the province's current owner, development and income.
 
